@@ -168,9 +168,24 @@ def memoria_livre():
     return ram, vram
 
 
-def cabe(nome, ram_gb, vram_gb):
-    """Ha memoria sobrando para carregar `nome` sem travar o PC? Se nao, avisa e diz que nao."""
+def _paginacao_livre():
+    """GB livres no arquivo de paginacao (memoria virtual em disco) do Windows."""
+    try:
+        import psutil
+        return psutil.swap_memory().free / 2 ** 30
+    except Exception:
+        return 0.0
+
+
+def cabe(nome, ram_gb, vram_gb, contar_paginacao=False):
+    """Ha memoria sobrando para carregar `nome` sem travar o PC? Se nao, avisa e diz que nao.
+
+    contar_paginacao: sem placa NVIDIA o modelo fica na RAM; o arquivo do modelo e lido mapeado
+    do disco e o Windows usa a paginacao para o resto. Entao conta a RAM livre + a paginacao livre
+    (PC de 8 GB com o navegador aberto tinha so ~1 GB de RAM livre e nunca carregava)."""
     ram, vram = memoria_livre()
+    if contar_paginacao and vram is None and ram is not None:
+        ram += _paginacao_livre()
     falta = []
     if ram is not None and ram < ram_gb:
         falta.append(f"RAM livre {ram:.1f} GB (precisa {ram_gb} GB)")

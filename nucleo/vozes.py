@@ -269,21 +269,37 @@ class MotorClonada:
         self.lat = {}
         self.trava = threading.Lock()
         t0 = time.time()
-        log("Carregando a voz clonada (XTTS v2) na placa de vídeo...")
         import torch
-        torch.set_num_threads(2)
+        self.dev = "cuda" if torch.cuda.is_available() else "cpu"
+        if self.dev == "cuda":
+            log("Carregando a voz clonada (XTTS v2) na placa de vídeo...")
+            torch.set_num_threads(2)
+        else:
+            # sem placa NVIDIA: roda no processador (mais lento, mas funciona). Medido num
+            # i7-13620H (6 nucleos de desempenho + 4 economicos): 6 threads = 0,58x do tempo real,
+            # 8 = 0,50x, 14 = 0,53x. Mais que os nucleos de desempenho so atrapalha.
+            try:
+                import psutil
+                fisicos = psutil.cpu_count(logical=False) or 4
+            except Exception:
+                fisicos = 4
+            nucleos = max(2, min(6, fisicos - 2))
+            torch.set_num_threads(nucleos)
+            log(f"Carregando a voz clonada (XTTS v2) no processador ({nucleos} núcleos) — "
+                "sem placa NVIDIA ela demora mais para começar a falar...")
         from TTS.api import TTS
         self._ler_modelo_mapeado(torch)
         self.torch = torch
-        if not torch.cuda.is_available():
-            raise RuntimeError("sem placa de vídeo CUDA: a voz clonada ficaria lenta demais")
-        api = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to("cuda")
+        api = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.dev)
         self.modelo = api.synthesizer.tts_model
+        if self.dev == "cpu":
+            self._gpt_8bits(torch)
         # o carregamento deixa ~3 GB de lixo na RAM (copia do arquivo do modelo): libera
         del api
         import gc
         gc.collect()
-        torch.cuda.empty_cache()
+        if self.dev == "cuda":
+            torch.cuda.empty_cache()
         try:
             ctypes_ = __import__("ctypes")
             ctypes_.windll.psapi.EmptyWorkingSet(ctypes_.windll.kernel32.GetCurrentProcess())
@@ -299,6 +315,33 @@ class MotorClonada:
         for _ in self.gerar("Pronto.", "narrador", 1.0, 1.0):
             pass
         log(f"Voz clonada pronta em {time.time() - t0:.0f}s.", tipo="ok")
+
+    def _gpt_8bits(self, torch):
+        """Sem placa de video, 77% do tempo da voz e o GPT gerando codigo a codigo, e a cada codigo
+        ele rele ~1,5 GB de pesos (com a RAM quase cheia, isso vira leitura de disco). Com os pesos
+        em 8 bits (int8) fica ~4x menor: medido num i7-13620H com 8 GB, a voz foi de 0,26x para
+        0,6x do tempo real e o programa de 1,9 GB para 0,9 GB."""
+        try:
+            import torch.nn as nn
+            from transformers.pytorch_utils import Conv1D
+
+            def trocar(mod):       # o GPT2 usa Conv1D (= Linear com o peso transposto)
+                for nome, f in mod.named_children():
+                    if isinstance(f, Conv1D):
+                        lin = nn.Linear(f.weight.shape[0], f.weight.shape[1])
+                        lin.weight = nn.Parameter(f.weight.t().contiguous())
+                        lin.bias = f.bias
+                        setattr(mod, nome, lin)
+                    else:
+                        trocar(f)
+
+            if self.cfg.get("xtts_8bits", True):
+                trocar(self.modelo.gpt)
+                self.modelo.gpt = torch.ao.quantization.quantize_dynamic(
+                    self.modelo.gpt, {nn.Linear}, dtype=torch.qint8)
+                log("Voz clonada: modelo comprimido em 8 bits (mais rápido no processador).")
+        except Exception as e:
+            log("Não deu para comprimir a voz clonada (segue normal):", repr(e), tipo="aviso")
 
     @staticmethod
     def _ler_modelo_mapeado(torch):
@@ -372,7 +415,7 @@ class MotorClonada:
         torch = self.torch
         lat = None
         try:
-            d = torch.load(cache, map_location="cuda")
+            d = torch.load(cache, map_location=self.dev)
             if tuple(tuple(x) for x in d["assin"]) == assin:
                 lat = (d["gpt"], d["spk"])
         except Exception:
@@ -653,6 +696,9 @@ class Narrador:
         self.ritmo_fala = 1.0     # velocidade em que a fala atual esta tocando
         self.com_buraco = set()
         self.sem_buraco = 0
+        # quantos segundos de voz a clonada gera por segundo (medido a cada fala). Na placa de video
+        # passa de 1 (nao precisa esperar); no processador fica ~0,5 e o colchao adaptativo usa isso
+        self.taxa_geracao = {}
         threading.Thread(target=self._sintetizar, daemon=True).start()
         threading.Thread(target=self._tocar, daemon=True).start()
 
@@ -660,9 +706,11 @@ class Narrador:
         if self.clonada or self.estado_clonada == "carregando":
             return
         from .util import cabe
-        if not cabe("a voz clonada", ram_gb=3.5, vram_gb=3.0):
+        if not cabe("a voz clonada", ram_gb=3.5, vram_gb=3.0, contar_paginacao=True):
+            # nao muda self.cfg["motor"]: motor_atual() ja usa a rapida enquanto a clonada nao
+            # carrega. Antes trocava para "rapida" e, ao mexer em qualquer ajuste no painel, isso era
+            # SALVO no config.json e a voz clonada nunca mais carregava sozinha.
             self.estado_clonada = "sem_memoria"
-            self.cfg["motor"] = "rapida"
             self.aviso("motor", {})
             return
 
@@ -676,6 +724,8 @@ class Narrador:
                     log("Falha antes da voz clonada:", repr(e), tipo="aviso")
             try:
                 self.clonada = MotorClonada(self.cfg, self.banco)
+                # chute inicial ate medir a 1a fala (sem isso a 1a fala picotava no processador)
+                self.taxa_geracao.setdefault("clonada", 0.5 if self.clonada.dev == "cpu" else 3.0)
                 self.estado_clonada = "pronta"
             except Exception as e:
                 self.estado_clonada = "erro"
@@ -819,9 +869,17 @@ class Narrador:
                                     "voz": voz, "voz_nome": d.get("nome", voz), "motor": m.nome,
                                     "atraso_ms": round((time.time() - visto) * 1000),
                                     "gerou_ms": round((time.time() - t0) * 1000),
-                                    "pressa": round(pressa, 2)}
+                                    "pressa": round(pressa, 2),
+                                    # duracao prevista da fala inteira (~12 letras/s, como no limite do XTTS)
+                                    "previsto_s": len(normalizar(texto)) / 12.0 / max(0.5, vel_total),
+                                    "taxa": self.taxa_geracao.get(m.nome)}
                             primeiro = False
                         self.audio.put((ger, pag, w, sr, dict(info or {}, id=fid, primeiro=info is not None)))
+                    gasto = time.time() - t0
+                    if total_audio >= 0.8 and not self._velha(ger, pag):
+                        nova = total_audio / max(0.001, gasto)
+                        ant = self.taxa_geracao.get(m.nome)
+                        self.taxa_geracao[m.nome] = nova if ant is None else ant * 0.6 + nova * 0.4
                     diag.ev("gerar_fim", id=fid, total_ms=round((time.time() - t0) * 1000),
                             audio_s=round(total_audio, 2),
                             velocidade=round(total_audio / max(0.001, time.time() - t0), 2))
@@ -863,6 +921,44 @@ class Narrador:
                 self.stream = None
                 sd._terminate()
                 sd._initialize()
+
+    def _colchao_adaptativo(self, ger, pag, fid, wav, sr, info):
+        """PC sem placa de video: a voz clonada sai a ~0,5x do tempo real. Tocando cada pedaco assim
+        que fica pronto, o audio acaba antes do proximo chegar e a fala picota. Aqui, antes de
+        comecar, espera ter guardado audio suficiente para tocar ATE O FIM SEM PARAR:
+            guardado >= falta_gerar * (1/taxa - 1)
+        Num PC rapido (taxa >= 1) nao espera nada. Desliga com "colchao_adaptativo": false."""
+        taxa = info.get("taxa")
+        if not self.cfg.get("colchao_adaptativo", True) or not taxa or taxa >= 1.15:
+            return
+        taxa = max(0.15, taxa * 0.9)                 # 10% de folga: a velocidade varia um pouco
+        previsto = float(info.get("previsto_s") or 0)
+        t0 = time.time()
+        limite = t0 + 30
+        while time.time() < limite:
+            guardado, acabou = len(wav) / sr, False
+            try:
+                for it in list(self.audio.queue):
+                    if (it[4] or {}).get("id") != fid:
+                        continue
+                    if it[2] is None:
+                        acabou = True
+                    else:
+                        guardado += len(it[2]) / it[3]
+            except Exception:
+                return
+            if acabou:
+                break
+            falta_gerar = max(0.0, previsto - guardado)
+            if guardado >= falta_gerar * (1.0 / taxa - 1.0) * max(1.0, self.ritmo_fala):
+                break
+            if self._velha(ger, pag) or ger != self.ger:
+                break
+            time.sleep(0.02)
+        esperou = time.time() - t0
+        if esperou > 0.05:
+            diag.ev("colchao", id=fid, esperou_ms=round(esperou * 1000), taxa=round(taxa, 2),
+                    previsto_s=round(previsto, 1))
 
     def _tocar(self):
         while True:
@@ -913,6 +1009,7 @@ class Narrador:
                     except Exception:
                         break
                     time.sleep(0.01)
+                self._colchao_adaptativo(ger, pag, fid, wav, sr, info)
             if sr != self.SR:                     # taxa unica: trocar de taxa reabre o audio e come o comeco
                 wav = np.interp(np.arange(0, len(wav), sr / self.SR), np.arange(len(wav)), wav).astype(np.float32)
                 sr = self.SR

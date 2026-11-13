@@ -1,3 +1,16 @@
+# Novidade de 13/11 (tarde): voz clonada em PC sem placa NVIDIA
+
+Testado num notebook com i7-13620H, 8 GB de RAM e só a placa Intel (sem NVIDIA).
+
+- **A voz clonada funciona sem placa de vídeo.** Antes ela se recusava a carregar ("sem memória livre"). Agora roda no processador.
+- **Mais que o dobro de rápida no processador:** o modelo é comprimido em 8 bits ao carregar. Gera 0,58 s de voz por segundo (antes 0,26 s), ocupa 0,8 GB de memória (antes 1,9 GB) e fica pronto em ~40 s (antes 111 s). Desliga com `"xtts_8bits": false` no config.json.
+- **Usa 6 núcleos:** medido, mais que os núcleos de desempenho só atrapalha (14 núcleos: 0,53x; 6: 0,58x).
+- **Não picota mais:** o programa mede a velocidade do PC e, antes de cada fala, espera juntar áudio suficiente para tocar até o fim sem parar. Teste com 2 falas: de 7 picotes (~7 s de silêncio) para 0. No PC lento a fala começa 3-5 s depois; com placa NVIDIA não espera nada. Desliga com `"colchao_adaptativo": false`.
+- **Checagem de memória:** sem placa de vídeo, ela agora conta também a memória virtual do Windows, além da RAM.
+- **Correção:** quando faltava memória ao abrir, o programa trocava para a voz rápida e, ao mexer em qualquer ajuste, essa troca ficava salva. Agora sua escolha nunca muda sozinha.
+- **Instalador:** fecha o Voz Universal aberto antes de atualizar (antes a cópia falhava pela metade), explica o que esperar sem placa NVIDIA e avisa quando o PC tem pouca RAM.
+- **Limite:** sem NVIDIA a voz clonada continua ~2x mais lenta que a fala. Em vídeo com legenda rápida ela atrasa e pula falas.
+
 # Novidade de 13/11 (manhã): abafar o jogo
 
 - **Enquanto a voz em português fala**, o som do jogo ou do vídeo abaixa sozinho (padrão: 25%) e volta ao normal ~0,5 s depois. A voz original em inglês fica só no fundo. O volume é o do próprio programa no mixer do Windows (Chrome, RDR2.exe...), então os outros programas não mudam.

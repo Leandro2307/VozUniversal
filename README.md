@@ -20,7 +20,7 @@ Dá voz aos diálogos e legendas de **qualquer jogo ou vídeo**, gerada na hora.
 
 Requisitos:
 - Windows 10/11 com o pacote de **OCR em português**. Ele vem no Windows em português; se faltar, o instalador avisa.
-- Placa **NVIDIA** recomendada para a voz clonada. Sem ela, a voz rápida (Piper/Edge) funciona normalmente.
+- Placa **NVIDIA** recomendada para a voz clonada. Sem ela, a voz clonada roda no processador (comprimida em 8 bits): não picota, mas cada fala começa alguns segundos depois. Com 8 GB de RAM, feche o navegador e outros programas pesados. A voz rápida (Piper/Edge) funciona bem em qualquer PC.
 
 ## Gerar o instalador
 

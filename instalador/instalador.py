@@ -85,6 +85,41 @@ class Instalacao:
         except Exception:
             return False
 
+    @staticmethod
+    def ram_total_gb():
+        try:
+            import ctypes
+
+            class Mem(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = Mem()
+            m.dwLength = ctypes.sizeof(Mem)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            return m.ullTotalPhys / 2 ** 30
+        except Exception:
+            return None
+
+    def fechar_programa_aberto(self):
+        """Atualizando com o Voz Universal aberto, o Windows trava os arquivos em uso (o .venv e o
+        nucleo/): a copia falhava pela metade ou o pip dava "Acesso negado". Fecha antes."""
+        # o pythonw do .venv so repassa para o Python de ferramentas\python: fecha qualquer um da pasta
+        alvo = os.path.normcase(os.path.join(self.destino, "")).lower().replace("'", "''")
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe'\" | "
+              "Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLower().StartsWith('" + alvo + "') } | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force; 'fechou' }")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                               timeout=30, creationflags=SEM_JANELA)
+            if "fechou" in r.stdout:
+                self.avisar("Fechei o Voz Universal que estava aberto (para poder atualizar).", 1)
+                time.sleep(2)              # o Windows solta os arquivos
+        except Exception:
+            pass
+
     # ------------------------------------------------------------- etapas
     def tudo(self):
         os.makedirs(self.destino, exist_ok=True)
@@ -93,6 +128,7 @@ class Instalacao:
         print(time.strftime("\n==== %Y-%m-%d %H:%M:%S ===="), flush=True)
 
         # 1) programa
+        self.fechar_programa_aberto()
         self.avisar("Copiando o programa...", 2)
         with zipfile.ZipFile(recurso("programa.zip")) as z:
             for item in z.namelist():
@@ -125,8 +161,20 @@ class Instalacao:
         # 3) dependencias
         gpu = self.tem_nvidia()
         indice = "https://download.pytorch.org/whl/cu121" if gpu else "https://download.pytorch.org/whl/cpu"
-        self.avisar("Placa de vídeo NVIDIA encontrada: voz clonada rápida." if gpu else
-                    "Sem placa NVIDIA: a voz clonada vai ficar lenta (a voz rápida funciona bem).", 14)
+        ram = self.ram_total_gb()
+        print(f"nvidia={gpu} ram_total_gb={ram}", flush=True)
+        if gpu:
+            self.avisar("Placa de vídeo NVIDIA encontrada: voz clonada rápida.", 14)
+        else:
+            # sem NVIDIA a voz clonada roda no processador (comprimida em 8 bits): ~0,5x do tempo
+            # real num i7 de 13a geracao. Nao picota (espera juntar audio), mas comeca 3-5 s depois.
+            self.avisar("Sem placa NVIDIA: a voz clonada vai rodar no processador. Funciona, mas cada "
+                        "fala começa alguns segundos depois da legenda.", 14)
+            time.sleep(4)
+        if ram is not None and ram < 12:
+            self.avisar(f"Atenção: este PC tem {ram:.0f} GB de RAM. A voz clonada precisa de uns 2 GB "
+                        "livres; feche o navegador e outros programas pesados antes de abrir.", None)
+            time.sleep(5)
         req = os.path.join(self.destino, "requirements.txt")
         # O antivirus do Windows as vezes trava os milhares de arquivos do torch enquanto sao
         # extraidos ("Acesso negado, os error 5"). O que ja baixou fica no cache: tenta de novo.
