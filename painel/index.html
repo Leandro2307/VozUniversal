@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voz Universal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b1230; --bg2:#0e1634b0; --card:#141d42b8; --card2:#1d2858d0; --linha:#ffffff1c; --texto:#e8ebf5; --suave:#8e97b3; --fraco:#5d6684;
+  --acento:#7c8cff; --acento2:#4fe0c0; --perigo:#ff6b81; --ok:#4fe08a; --aviso:#ffcb6b;
+  --menino:#4fc3f7; --menina:#f48fb1; --homem:#5c9dff; --mulher:#c792ea; --idoso:#ffb74d; --idosa:#ff8a65; --narrador:#9aa5b1;
+  --raio:18px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#0b1230;color:var(--texto);font-family:Outfit,"Segoe UI",system-ui,sans-serif;height:100%;overflow:hidden}
+button{font:inherit;color:inherit;cursor:pointer}
+/* fundo azul (gradientes parados: leve para a placa de video, nada de desfoque animado) */
+.fundo{position:fixed;inset:0;z-index:-1;background:
+  radial-gradient(60% 70% at 15% 10%,#2347c9 0%,transparent 70%),
+  radial-gradient(50% 60% at 90% 25%,#0f5f9e 0%,transparent 70%),
+  radial-gradient(55% 60% at 50% 105%,#33269a 0%,transparent 70%),
+  radial-gradient(35% 40% at 85% 95%,#0b6f74 0%,transparent 70%),#0b1230}
+.fundo::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,#0b123040,#070b1fbb)}
+/* barra de titulo propria (a janela nao tem borda do Windows) */
+.barra-titulo{position:fixed;top:0;left:0;right:0;height:44px;display:flex;align-items:center;padding-left:16px;z-index:20;background:linear-gradient(180deg,#0b123088,transparent)}
+.barra-titulo .t{user-select:none;cursor:default;display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;flex:1;height:100%}
+.barra-titulo .t svg{width:18px;height:18px}
+.barra-titulo .ctl{display:flex;height:100%}
+.barra-titulo .ctl button{width:48px;height:100%;background:none;border:none;color:#cfd6ff;font-size:15px;opacity:.8}
+.barra-titulo .ctl button:hover{background:#ffffff18;opacity:1}
+.barra-titulo .ctl button.x:hover{background:#e81123;color:#fff}
+.rolagem{position:fixed;top:44px;left:0;right:0;bottom:0;overflow:auto}
+.rolagem::-webkit-scrollbar{width:10px}.rolagem::-webkit-scrollbar-thumb{background:#ffffff22;border-radius:9px;border:3px solid transparent;background-clip:padding-box}
+.wrap{max-width:1240px;margin:0 auto;padding:6px 22px 40px}
+
+/* ---- topo */
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:12px;font-weight:800;font-size:22px;letter-spacing:.3px}
+.logo .marca{width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,var(--acento),var(--acento2));display:grid;place-items:center;box-shadow:0 8px 30px #7c8cff55}
+.logo .marca svg{width:24px;height:24px}
+.logo small{display:block;font-weight:500;font-size:12px;color:var(--suave);letter-spacing:.2px}
+.jogo{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--linha);padding:8px 14px;border-radius:999px;font-size:14px;max-width:420px}
+.jogo b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+.ponto{width:10px;height:10px;border-radius:50%;background:var(--fraco);flex:none}
+.ponto.lendo{background:var(--ok);box-shadow:0 0 0 0 #4fe08a88;animation:pulso 1.6s infinite}
+.ponto.procurando{background:var(--aviso);animation:pulso 1.2s infinite}
+.ponto.pausado,.ponto.coberto{background:var(--perigo)}
+.ponto.sem_video,.ponto.outra_janela{background:var(--aviso)}
+@keyframes pulso{0%{box-shadow:0 0 0 0 currentColor}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.espaco{flex:1}
+.btn{background:var(--card2);border:1px solid var(--linha);padding:9px 14px;border-radius:12px;font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:7px;transition:.15s}
+.btn:hover{border-color:var(--acento);transform:translateY(-1px)}
+.btn.prim{background:linear-gradient(135deg,var(--acento),#9a7cff);border:none;color:#fff}
+.btn.perigo:hover{border-color:var(--perigo);color:var(--perigo)}
+.btn.mini{padding:6px 10px;font-size:12.5px;border-radius:10px}
+.kbd{font-size:11px;color:var(--suave);background:#0006;padding:1px 6px;border-radius:6px;font-weight:500}
+.seg{display:inline-flex;background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:3px}
+.seg button{background:none;border:none;padding:6px 12px;border-radius:9px;font-size:13px;font-weight:600;color:var(--suave)}
+.seg button.on{background:var(--card2);color:var(--texto);box-shadow:inset 0 0 0 1px var(--linha)}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#ffffff10;color:var(--suave);font-weight:600}
+
+/* ---- palco */
+.palco{margin-top:20px;display:grid;grid-template-columns:1fr 320px;gap:18px}
+.card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--linha);border-radius:var(--raio);padding:20px}
+.agora{position:relative;overflow:hidden;min-height:220px;display:flex;gap:22px;align-items:center}
+.agora::before{content:"";position:absolute;inset:-40%;background:radial-gradient(closest-side,color-mix(in srgb,var(--cor,#7c8cff) 18%,transparent),transparent);opacity:.0;transition:.5s}
+.agora.ativo::before{opacity:1}
+.avatar{--cor:var(--narrador);width:112px;height:112px;border-radius:30px;flex:none;display:grid;place-items:center;font-size:58px;background:linear-gradient(145deg,color-mix(in srgb,var(--cor) 38%,#0000),color-mix(in srgb,var(--cor) 10%,#0000));border:2px solid color-mix(in srgb,var(--cor) 60%,#0000);position:relative;z-index:1;transition:.3s}
+.agora.ativo .avatar{box-shadow:0 0 0 6px color-mix(in srgb,var(--cor) 18%,#0000),0 10px 40px color-mix(in srgb,var(--cor) 40%,#0000)}
+.fala{position:relative;z-index:1;flex:1;min-width:0}
+.fala .quem{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.fala .quem h2{margin:0;font-size:26px;font-weight:700}
+.chip{--cor:var(--narrador);font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;color:var(--cor);background:color-mix(in srgb,var(--cor) 16%,#0000);border:1px solid color-mix(in srgb,var(--cor) 40%,#0000);white-space:nowrap}
+.fala blockquote{margin:12px 0 0;font-size:20px;line-height:1.45;color:#f3f5ff;min-height:58px}
+.fala .meta{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;color:var(--suave);font-size:13px}
+.eq{display:flex;gap:3px;align-items:flex-end;height:22px}
+.eq i{width:4px;border-radius:2px;background:var(--cor,var(--acento));height:4px;transition:height .2s}
+.agora.ativo .eq i{animation:eq .9s ease-in-out infinite}
+.eq i:nth-child(2){animation-delay:-.2s!important}.eq i:nth-child(3){animation-delay:-.45s!important}.eq i:nth-child(4){animation-delay:-.1s!important}.eq i:nth-child(5){animation-delay:-.6s!important}
+@keyframes eq{0%,100%{height:4px}50%{height:22px}}
+.lido{margin-top:14px;padding:10px 12px;border-radius:12px;background:#0005;border:1px dashed var(--linha);font-size:13px;color:var(--suave);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lido b{color:var(--fraco);font-weight:600;margin-right:6px}
+
+.lateral{display:flex;flex-direction:column;gap:12px}
+.mini-card{background:var(--card);border:1px solid var(--linha);border-radius:14px;padding:14px}
+.mini-card h4{margin:0 0 8px;font-size:12px;color:var(--suave);text-transform:uppercase;letter-spacing:1px}
+.status-linha{display:flex;align-items:center;justify-content:space-between;font-size:14px;padding:4px 0}
+.status-linha span:last-child{font-weight:600}
+.verde{color:var(--ok)}.amarelo{color:var(--aviso)}.vermelho{color:var(--perigo)}
+.ticker{font-size:12.5px;color:var(--suave);display:flex;flex-direction:column;gap:6px;max-height:150px;overflow:hidden}
+.ticker div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---- abas */
+.abas{margin-top:22px;display:flex;gap:6px;border-bottom:1px solid var(--linha);flex-wrap:wrap}
+.abas button{background:none;border:none;padding:12px 16px;font-size:15px;font-weight:600;color:var(--suave);border-bottom:2px solid transparent;margin-bottom:-1px}
+.abas button.on{color:var(--texto);border-color:var(--acento)}
+.abas button .n{font-size:11px;background:var(--card2);padding:1px 7px;border-radius:999px;margin-left:5px;color:var(--suave)}
+.aba{display:none;padding-top:18px}.aba.on{display:block}
+.vazio{text-align:center;color:var(--suave);padding:50px 20px;border:1px dashed var(--linha);border-radius:var(--raio)}
+.vazio .grande{font-size:42px}
+
+/* personagens */
+.grade{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
+.pers{--cor:var(--narrador);background:var(--card);border:1px solid var(--linha);border-radius:16px;padding:14px;position:relative;transition:.2s}
+.pers:hover{border-color:color-mix(in srgb,var(--cor) 55%,var(--linha))}
+.pers.falando{border-color:var(--cor);box-shadow:0 0 0 3px color-mix(in srgb,var(--cor) 20%,#0000)}
+.pers .topo{display:flex;gap:12px;align-items:center}
+.pers .av{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;font-size:30px;background:color-mix(in srgb,var(--cor) 20%,#0000);flex:none}
+.pers h3{margin:0;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pers .sub{font-size:12.5px;color:var(--suave);margin-top:2px}
+.barra{height:5px;background:#ffffff12;border-radius:9px;overflow:hidden;margin:12px 0 6px}
+.barra i{display:block;height:100%;background:var(--cor);border-radius:9px}
+.pistas{font-size:12px;color:var(--suave);min-height:16px}
+.pers .acoes{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.cats{display:flex;gap:4px;flex-wrap:wrap;margin-top:10px}
+.cats button{--cor:var(--narrador);border:1px solid var(--linha);background:none;border-radius:9px;padding:4px 7px;font-size:15px;line-height:1;opacity:.55}
+.cats button:hover{opacity:1}
+.cats button.on{opacity:1;background:color-mix(in srgb,var(--cor) 22%,#0000);border-color:var(--cor)}
+.fixo{position:absolute;top:12px;right:12px;font-size:11px}
+.ajuste{display:none;margin-top:10px;font-size:12.5px;color:var(--suave)}
+.pers.aberto .ajuste{display:grid;gap:8px}
+.ajuste label{display:grid;grid-template-columns:70px 1fr 40px;align-items:center;gap:8px}
+input[type=range]{accent-color:var(--acento);width:100%}
+select{background:var(--card2);color:var(--texto);border:1px solid var(--linha);border-radius:9px;padding:5px 8px;font:inherit;font-size:13px}
+
+/* banco */
+.banco{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+.cat-box{--cor:var(--narrador);background:var(--card);border:1px solid var(--linha);border-radius:16px;padding:14px}
+.cat-box h3{margin:0 0 10px;display:flex;align-items:center;gap:10px;font-size:16px}
+.cat-box h3 .e{font-size:24px}
+.voz{display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;background:#0003;border:1px solid transparent;margin-top:8px}
+.voz:hover{border-color:var(--linha)}
+.voz .num{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-weight:800;background:color-mix(in srgb,var(--cor) 25%,#0000);color:var(--cor);flex:none}
+.voz .info{flex:1;min-width:0}
+.voz .info b{display:block;font-size:14.5px}
+.voz .info span{display:block;font-size:12px;color:var(--suave);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.voz .usos{font-size:11px;color:var(--fraco)}
+.icone{width:34px;height:34px;border-radius:10px;border:1px solid var(--linha);background:var(--card2);display:grid;place-items:center;font-size:15px;flex:none}
+.icone:hover{border-color:var(--cor,var(--acento))}
+
+/* caixa */
+.caixa-wrap{display:grid;grid-template-columns:1fr 300px;gap:16px}
+.foto{position:relative;border-radius:14px;overflow:hidden;background:#000;border:1px solid var(--linha);user-select:none;min-height:200px;display:grid;place-items:center}
+.foto img{display:block;width:100%;height:auto}
+.foto .ret{position:absolute;border:2px solid var(--acento2);background:#4fe0c022;border-radius:6px;pointer-events:none}
+.foto .ret.nome{border-color:var(--aviso);background:#ffcb6b22}
+.foto .ret.video{border-color:#9fb2ff;background:#7c8cff14;border-style:dashed}
+.foto .ret.video span{background:#9fb2ff}
+.foto .ret span{position:absolute;top:-22px;left:-2px;font-size:11px;font-weight:700;background:var(--acento2);color:#002;padding:2px 7px;border-radius:6px}
+.foto .ret.nome span{background:var(--aviso)}
+.foto.desenhando{cursor:crosshair}
+.passos{display:flex;flex-direction:column;gap:10px}
+.passos p{margin:0;font-size:13.5px;color:var(--suave);line-height:1.5}
+
+/* ajustes */
+.ajustes{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.opcao{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;background:var(--card);border:1px solid var(--linha);border-radius:14px}
+.opcao b{display:block;font-size:14.5px}.opcao span{font-size:12.5px;color:var(--suave)}
+.chave{width:46px;height:26px;border-radius:99px;background:#ffffff1a;position:relative;border:none;flex:none;transition:.2s}
+.chave::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.2s}
+.chave.on{background:var(--acento)}.chave.on::after{left:23px}
+.faixa{width:160px}
+
+/* registro */
+.registro{background:var(--card);border:1px solid var(--linha);border-radius:14px;padding:6px;max-height:520px;overflow:auto;font-size:13px}
+.registro div{padding:6px 10px;border-radius:8px;display:flex;gap:10px}
+.registro div:nth-child(odd){background:#ffffff05}
+.registro time{color:var(--fraco);flex:none;font-variant-numeric:tabular-nums}
+.l-fala{color:#dfe6ff}.l-novo{color:var(--acento2)}.l-ok{color:var(--ok)}.l-aviso{color:var(--aviso)}.l-erro{color:var(--perigo)}
+
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(30px);background:var(--card2);border:1px solid var(--linha);padding:12px 18px;border-radius:12px;opacity:0;transition:.3s;font-size:14px;z-index:9;pointer-events:none}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.desconectado{position:fixed;inset:0;background:#0b0d14ee;display:none;place-items:center;z-index:10;text-align:center}
+.desconectado.on{display:grid}
+
+@media (max-width:900px){.palco,.caixa-wrap{grid-template-columns:1fr}.agora{flex-direction:column;text-align:center}.fala .quem{justify-content:center}}
+</style>
+</head>
+<body>
+<div class="fundo"></div>
+<div class="barra-titulo">
+  <div class="t" id="arrastar" title="Arraste para mover · dois cliques para maximizar"><svg viewBox="0 0 24 24" fill="none" stroke="#9fb2ff" stroke-width="2.6" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg>Voz Universal</div>
+  <div class="ctl">
+    <button title="Minimizar" onclick="janela('minimizar')">&#8212;</button>
+    <button title="Maximizar" onclick="janela('maximizar')">&#9634;</button>
+    <button class="x" title="Fechar" onclick="janela('fechar')">&#10005;</button>
+  </div>
+</div>
+<div class="rolagem">
+<div class="wrap">
+  <header>
+    <div class="logo">
+      <div class="marca"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg></div>
+      <div>Voz Universal<small>vozes para qualquer jogo, geradas na hora</small></div>
+    </div>
+    <div class="jogo" id="jogo"><span class="ponto" id="ponto"></span><b id="jogoNome">Esperando um jogo…</b><span class="tag" id="jogoStatus">—</span></div>
+    <div class="espaco"></div>
+    <div class="seg" id="motorSeg" title="Clonada: voz natural (placa de vídeo). Rápida: mais leve.">
+      <button data-m="clonada">✨ Clonada</button><button data-m="rapida">⚡ Rápida</button>
+    </div>
+    <button class="btn" id="btnRepetir">↻ Repetir <span class="kbd">F11</span></button>
+    <button class="btn prim" id="btnPausar">⏸ Pausar <span class="kbd">F10</span></button>
+  </header>
+
+  <section class="palco">
+    <div class="card agora" id="agora">
+      <div class="avatar" id="agAvatar">📖</div>
+      <div class="fala">
+        <div class="quem"><h2 id="agNome">Pronto para falar</h2><span class="chip" id="agCat">Narrador</span><div class="eq" id="agEq"><i></i><i></i><i></i><i></i><i></i></div></div>
+        <blockquote id="agTexto">Abra um jogo e comece a jogar. Quando aparecer um diálogo, ele é lido aqui com a voz do personagem.</blockquote>
+        <div class="meta" id="agMeta"></div>
+        <div class="lido"><b>NA TELA</b><span id="lido">—</span></div>
+      </div>
+    </div>
+    <div class="lateral">
+      <div class="mini-card">
+        <h4>Sistema</h4>
+        <div class="status-linha"><span>Voz clonada</span><span id="stClonada">—</span></div>
+        <div class="status-linha"><span>Usando agora</span><span id="stUsando">—</span></div>
+        <div class="status-linha"><span>Visão (quem fala)</span><span id="stVisao">—</span></div>
+        <div class="status-linha"><span>Caixa de diálogo</span><span id="stCaixa">—</span></div>
+        <div class="status-linha" title="Tempo entre o texto aparecer e a voz começar (últimas 20 falas)"><span>Atraso da voz</span><span id="stAtraso">—</span></div>
+        <div class="status-linha" title="Silêncios no meio de uma fala desde que o programa abriu"><span>Picotes</span><span id="stPicotes">0</span></div>
+      </div>
+      <div class="mini-card" style="flex:1">
+        <h4>Últimos acontecimentos</h4>
+        <div class="ticker" id="ticker"></div>
+      </div>
+    </div>
+  </section>
+
+  <nav class="abas" id="abas">
+    <button data-a="pers" class="on">Personagens <span class="n" id="nPers">0</span></button>
+    <button data-a="vozes">Banco de vozes <span class="n">13</span></button>
+    <button data-a="caixa">Caixa de diálogo</button>
+    <button data-a="ajustes">Ajustes</button>
+    <button data-a="registro">Registro</button>
+  </nav>
+
+  <section class="aba on" id="aba-pers"><div id="gradePers"></div></section>
+  <section class="aba" id="aba-vozes"><div class="banco" id="banco"></div></section>
+  <section class="aba" id="aba-caixa">
+    <div class="caixa-wrap">
+      <div class="foto" id="foto"><span style="color:var(--suave)">Clique em “Atualizar foto” com o jogo aberto</span></div>
+      <div class="passos">
+        <div class="mini-card"><h4>Ler de onde?</h4>
+          <select id="fonteSel" style="width:100%;margin-bottom:8px"></select>
+          <button class="btn mini" id="btnJanelas">↻ Atualizar lista</button>
+          <p style="margin-top:8px">Para vídeos do YouTube, escolha a janela do navegador (ou a tela inteira) e deixe o vídeo em tela cheia.</p></div>
+        <div class="mini-card"><h4>Onde fica o texto</h4>
+          <p>O programa acha a caixa de diálogo sozinho depois de alguns diálogos. Se errar, marque aqui: deixe um diálogo aberto no jogo, atualize a foto e arraste um retângulo sobre o texto.</p></div>
+        <button class="btn" id="btnFoto">📷 Atualizar foto</button>
+        <button class="btn prim" id="btnMarcar">▭ Marcar caixa de diálogo</button>
+        <button class="btn" id="btnNome">🏷 Marcar onde aparece o nome <span class="tag">opcional</span></button>
+        <button class="btn" id="btnAuto">✦ Procurar sozinho de novo</button>
+        <button class="btn" id="btnTiraNome">Esquecer zona do nome</button>
+        <div class="mini-card"><h4>Jogo</h4>
+          <div class="opcao" style="padding:0;border:none;background:none"><div><b>Fixar este jogo</b><span>Não troca de jogo ao clicar em outra janela</span></div><button class="chave" id="chFixar"></button></div></div>
+      </div>
+    </div>
+  </section>
+  <section class="aba" id="aba-ajustes"><div class="ajustes" id="ajustes"></div></section>
+  <section class="aba" id="aba-registro"><div class="registro" id="registro"></div></section>
+</div>
+</div>
+<input type="file" id="arquivo" accept=".wav,audio/wav" hidden>
+<div class="toast" id="toast"></div>
+<div class="desconectado" id="desc"><div><div style="font-size:46px">🔌</div><h2>Programa fechado</h2><p style="color:var(--suave)">Abra “Iniciar Voz Universal” de novo. Esta tela reconecta sozinha.</p></div></div>
+
+<script>
+const CAT = {
+  menino:{e:"👦",r:"Menino"}, menina:{e:"👧",r:"Menina"}, homem:{e:"👨",r:"Homem"},
+  mulher:{e:"👩",r:"Mulher"}, idoso:{e:"👴",r:"Idoso"}, idosa:{e:"👵",r:"Idosa"}, narrador:{e:"📖",r:"Narrador"}
+};
+const ORDEM = ["menino","menina","homem","mulher","idoso","idosa"];
+const STATUS = {outra_janela:"outro programa na frente", sem_video:"esperando um vídeo", lendo:"lendo a tela", procurando:"procurando a caixa", aguardando:"esperando jogo", pausado:"pausado", coberto:"janela cobrindo", sem_regiao:"marque a caixa"};
+let E = {personagens:[], banco:{}, config:{}, motor:{}, log:[]};
+let abertos = new Set(), falandoNome = null, uploadAlvo = null;
+const $ = s => document.querySelector(s);
+const cor = c => `var(--${CAT[c]?c:"narrador"})`;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function janela(acao){ fetch("/api/janela",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({acao})}); }
+const barraT = document.getElementById("arrastar");
+barraT.addEventListener("mousedown", e => { if (e.button===0 && e.detail===1) janela("arrastar"); });
+barraT.addEventListener("dblclick", () => janela("maximizar"));
+let atrasos = [], picotes = 0;
+function medir(f){
+  if (!f || typeof f.atraso_ms !== "number" || (f.quem||"").startsWith("Teste")) return;
+  atrasos.push(f.atraso_ms); if (atrasos.length > 20) atrasos.shift();
+  const o = atrasos.slice().sort((a,b)=>a-b), med = o[Math.floor(o.length/2)];
+  const el = $("#stAtraso"); el.textContent = (med/1000).toFixed(2).replace(".", ",") + " s";
+  el.className = med < 700 ? "verde" : med < 1200 ? "amarelo" : "vermelho";
+}
+function toast(t){const el=$("#toast");el.textContent=t;el.classList.add("on");clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove("on"),2200)}
+async function api(nome, dados={}){
+  const r = await fetch("/api/"+nome,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(dados)});
+  return r.json().catch(()=>({}));
+}
+
+// ---------------------------------------------------------------- websocket
+function conectar(){
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => $("#desc").classList.remove("on");
+  ws.onclose = () => { $("#desc").classList.add("on"); setTimeout(conectar, 1500); };
+  ws.onmessage = ev => {
+    const {tipo, dados} = JSON.parse(ev.data);
+    if (tipo === "estado") { E = dados; tudo(); }
+    else if (tipo === "status") { E.status = dados.status; E.pausado = dados.pausado; topo(); }
+    else if (tipo === "falando") { E.falando = dados; agora(true); medir(dados); }
+    else if (tipo === "buraco") { picotes++; $("#stPicotes").textContent = picotes; $("#stPicotes").className = picotes > 5 ? "amarelo" : ""; }
+    else if (tipo === "calado") { $("#agora").classList.remove("ativo"); falandoNome=null; marcarFalando(); }
+    else if (tipo === "lido") { $("#lido").textContent = (dados.nome ? `[${dados.nome}] ` : "") + (dados.texto || "—"); }
+    else if (tipo === "personagens") { E.personagens = dados; personagens(); }
+    else if (tipo === "motor") { E.motor = dados; E.config.motor = dados.escolhido; sistema(); }
+    else if (tipo === "log") { E.log.push(dados); if (E.log.length>300) E.log.shift(); logs(dados); }
+  };
+}
+
+// ---------------------------------------------------------------- render
+function tudo(){ topo(); agora(false); sistema(); personagens(); banco(); ajustes(); caixaInfo(); logs(); }
+
+function topo(){
+  const j = E.jogo;
+  $("#jogoNome").textContent = j ? (j.titulo || j.exe) : (E.config && E.config.fonte==="janela" ? "Janela escolhida não está aberta" : "Esperando um jogo…");
+  $("#jogo").title = "Clique para escolher de onde ler (jogo, tela inteira ou YouTube)";
+  $("#jogo").title = j ? j.exe : "Abra um jogo e clique nele";
+  const st = E.pausado ? "pausado" : (E.status || "aguardando");
+  $("#ponto").className = "ponto " + st;
+  $("#jogoStatus").textContent = STATUS[st] || st;
+  $("#btnPausar").innerHTML = (E.pausado ? "▶ Retomar" : "⏸ Pausar") + ' <span class="kbd">F10</span>';
+  $("#chFixar").classList.toggle("on", !!(E.config && E.config.jogo_fixo));
+}
+
+function agora(ativo){
+  const f = E.falando; if (!f) return;
+  const c = CAT[f.categoria] ? f.categoria : "narrador";
+  const el = $("#agora"); el.style.setProperty("--cor", cor(c));
+  $("#agAvatar").style.setProperty("--cor", cor(c)); $("#agAvatar").textContent = CAT[c].e;
+  $("#agNome").textContent = f.quem;
+  const chip = $("#agCat"); chip.style.setProperty("--cor", cor(c)); chip.textContent = CAT[c].r;
+  $("#agTexto").textContent = "“" + f.texto + "”";
+  $("#agMeta").innerHTML = `<span class="tag">🎙 ${esc(f.voz_nome)}</span><span class="tag">${f.motor==="clonada"?"✨ clonada":"⚡ rápida"}</span><span class="tag">⏱ ${f.atraso_ms} ms</span>`;
+  document.querySelectorAll("#agEq i").forEach(i=>i.style.background=cor(c));
+  if (ativo) { el.classList.add("ativo"); falandoNome = f.quem; marcarFalando(); }
+}
+
+function sistema(){
+  const m = E.motor || {};
+  const cl = {pronta:["pronta","verde"],carregando:["carregando…","amarelo"],erro:["indisponível","vermelho"],sem_memoria:["sem memória livre","vermelho"],desligada:["desligada",""]}[m.clonada] || ["—",""];
+  $("#stClonada").textContent = cl[0]; $("#stClonada").className = cl[1];
+  $("#stUsando").textContent = m.usando === "clonada" ? "✨ clonada" : "⚡ rápida";
+  const vi = {pronta:["pronta","verde"],carregando:["carregando…","amarelo"],erro:["indisponível","vermelho"],espera:["carrega ao abrir",""],desligada:["desligada",""]}[m.visao] || ["—",""];
+  $("#stVisao").textContent = vi[0]; $("#stVisao").className = vi[1];
+  document.querySelectorAll("#motorSeg button").forEach(b=>b.classList.toggle("on", b.dataset.m === (E.config.motor||m.escolhido)));
+}
+
+function caixaInfo(){
+  $("#stCaixa").textContent = E.modo_legenda ? "legendas (automático)" : E.regiao ? "marcada" : (E.jogo ? "procurando…" : "—");
+  $("#stCaixa").className = (E.modo_legenda || E.regiao) ? "verde" : "amarelo";
+  desenharRets();
+}
+
+function personagens(){
+  const ps = E.personagens || [];
+  $("#nPers").textContent = ps.length;
+  const g = $("#gradePers");
+  if (!ps.length){ g.className=""; g.innerHTML = `<div class="vazio"><div class="grande">🎭</div><h3>Nenhum personagem ainda</h3><p>Quando alguém com nome falar no jogo, aparece aqui com o tipo descoberto e a voz que ganhou.<br>Clique nos ícones para corrigir se errar.</p></div>`; return; }
+  g.className = "grade";
+  g.innerHTML = ps.map(p => {
+    const c = CAT[p.categoria] ? p.categoria : "narrador";
+    const vozes = Object.values(E.banco||{}).filter(v=>v.categoria===p.categoria);
+    return `<div class="pers ${abertos.has(p.nome)?"aberto":""} ${falandoNome===p.nome?"falando":""}" style="--cor:${cor(c)}" data-nome="${esc(p.nome)}">
+      ${p.fixo?'<span class="fixo tag">✔ corrigido</span>':""}
+      <div class="topo"><div class="av">${CAT[c].e}</div><div style="min-width:0">
+        <h3>${esc(p.nome)}</h3><div class="sub">${CAT[c].r} · voz ${esc(p.voz_nome)}${Math.abs(p.tom-1)>0.01?` · tom ${(+p.tom).toFixed(2)}`:""} · ${p.falas} falas</div></div></div>
+      <div class="barra" title="Certeza"><i style="width:${Math.round((p.confianca||0)*100)}%"></i></div>
+      <div class="pistas">${p.fixo?"definido por você":`${Math.round((p.confianca||0)*100)}% de certeza${p.pistas.length?" · "+esc(p.pistas.slice(-2).join(" · ")):""}`}</div>
+      <div class="cats">${ORDEM.map(k=>`<button style="--cor:${cor(k)}" class="${k===p.categoria?"on":""}" data-cat="${k}" title="${CAT[k].r}">${CAT[k].e}</button>`).join("")}</div>
+      <div class="acoes">
+        <button class="btn mini" data-ac="ouvir">▶ Ouvir</button>
+        <button class="btn mini" data-ac="ajustar">🎚 Ajustar</button>
+        <button class="btn mini perigo" data-ac="esquecer" title="Apaga a ficha (é descoberto de novo)">🗑</button>
+      </div>
+      <div class="ajuste">
+        <label>Voz <select data-campo="voz">${vozes.map(v=>`<option value="${v.id}" ${v.id===p.voz?"selected":""}>${esc(v.nome)}</option>`).join("")}</select><span></span></label>
+        <label>Tom <input type="range" min="0.8" max="1.3" step="0.01" value="${p.tom}" data-campo="tom"><span>${(+p.tom).toFixed(2)}</span></label>
+        <label>Ritmo <input type="range" min="0.75" max="1.3" step="0.01" value="${p.vel}" data-campo="vel"><span>${(+p.vel).toFixed(2)}</span></label>
+      </div></div>`;
+  }).join("");
+}
+function marcarFalando(){ document.querySelectorAll(".pers").forEach(el=>el.classList.toggle("falando", el.dataset.nome===falandoNome)); }
+
+$("#gradePers").addEventListener("click", e => {
+  const card = e.target.closest(".pers"); if (!card) return; const nome = card.dataset.nome;
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.cat){ api("personagem",{nome,categoria:b.dataset.cat}); toast(`${nome} agora é ${CAT[b.dataset.cat].r.toLowerCase()}`); }
+  else if (b.dataset.ac==="ouvir"){ const p=E.personagens.find(x=>x.nome===nome); api("testar",{voz:p.voz,tom:p.tom,vel:p.vel}); }
+  else if (b.dataset.ac==="ajustar"){ abertos.has(nome)?abertos.delete(nome):abertos.add(nome); card.classList.toggle("aberto"); }
+  else if (b.dataset.ac==="esquecer"){ api("personagem",{nome,esquecer:true}); toast(`Ficha de ${nome} apagada`); }
+});
+$("#gradePers").addEventListener("input", e => { if (e.target.type==="range") e.target.nextElementSibling.textContent = (+e.target.value).toFixed(2); });
+$("#gradePers").addEventListener("change", e => {
+  const card = e.target.closest(".pers"); const campo = e.target.dataset.campo; if (!card||!campo) return;
+  api("personagem",{nome:card.dataset.nome,[campo]: campo==="voz"? e.target.value : +e.target.value});
+});
+
+function banco(){
+  const b = E.banco || {};
+  const usos = {}; (E.personagens||[]).forEach(p=>usos[p.voz]=(usos[p.voz]||0)+1);
+  const grupos = [...ORDEM, "narrador"];
+  $("#banco").innerHTML = grupos.map(c => {
+    const vs = Object.values(b).filter(v=>v.categoria===c).sort((a,z)=>a.id.localeCompare(z.id));
+    return `<div class="cat-box" style="--cor:${cor(c)}"><h3><span class="e">${CAT[c].e}</span>${CAT[c].r}<span class="espaco"></span><span class="tag">${vs.length} voz${vs.length>1?"es":""}</span></h3>
+      ${vs.map((v,i)=>`<div class="voz"><div class="num">${c==="narrador"?"N":i+1}</div>
+        <div class="info"><b>${esc(v.nome)}</b><span title="${esc(v.descricao)}">${esc(v.descricao)}</span>
+        <span class="usos">amostra ${v.segundos}s${v.segundos<8?" ⚠ curta":""} · ${usos[v.id]||0} personagem(ns) usando</span></div>
+        <button class="icone" title="Ouvir esta voz falando" data-testar="${v.id}">▶</button>
+        <button class="icone" title="Ouvir a amostra original" data-amostra="${v.id}">🎧</button>
+        <button class="icone" title="Trocar a amostra (arquivo .wav de 10 a 60 s com uma pessoa só falando)" data-trocar="${v.id}">⤒</button></div>`).join("")}</div>`;
+  }).join("");
+}
+let tocador = null;
+$("#banco").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.testar){ api("testar",{voz:b.dataset.testar}); toast("Gerando…"); }
+  if (b.dataset.amostra){ if (tocador) tocador.pause(); tocador = new Audio("/api/amostra/"+b.dataset.amostra+"?t="+Date.now()); tocador.play(); }
+  if (b.dataset.trocar){ uploadAlvo = b.dataset.trocar; $("#arquivo").click(); }
+});
+$("#arquivo").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f || !uploadAlvo) return;
+  const r = await fetch("/api/amostra/"+uploadAlvo,{method:"POST",body:await f.arrayBuffer()}).then(r=>r.json());
+  toast(r.ok ? `Amostra trocada (${Math.round(r.segundos)}s)` : (r.erro||"Erro")); e.target.value="";
+});
+
+function ajustes(){
+  const c = E.config || {};
+  const ch = (k,t,d) => `<div class="opcao"><div><b>${t}</b><span>${d}</span></div><button class="chave ${c[k]?"on":""}" data-k="${k}"></button></div>`;
+  const fx = (k,t,d,min,max,st) => `<div class="opcao"><div><b>${t} <span class="tag" id="v_${k}">${(+c[k]).toFixed(2)}</span></b><span>${d}</span></div><input class="faixa" type="range" min="${min}" max="${max}" step="${st}" value="${c[k]}" data-k="${k}"></div>`;
+  $("#ajustes").innerHTML =
+    fx("volume","Volume","Altura das vozes",0.1,1.5,0.05) +
+    fx("velocidade","Velocidade geral","Ritmo de todas as falas",0.8,1.4,0.01) +
+    ch("abafar_jogo","Abafar o jogo","Abaixa o som do jogo/vídeo enquanto a voz em português fala (a voz original em inglês fica no fundo; a música volta logo depois)") +
+    fx("abafar_nivel","Volume do jogo abafado","0 = mudo · 0,25 = recomendado · 1 = sem abafar",0,1,0.05) +
+    ch("visao","Visão","Olha a imagem do personagem para descobrir sexo e idade") +
+    ch("auto_regiao","Achar a caixa sozinho","Procura onde aparecem os diálogos em jogo novo") +
+    ch("interromper_ao_avancar","Cortar ao avançar","Ligado: a fala anterior para na hora. Desligado: ela acelera para alcançar a nova") +
+    ch("acelerar_se_atrasado","Alcançar o texto","Fala um pouco mais rápido se ficou para trás");
+}
+$("#ajustes").addEventListener("click", e => { const b=e.target.closest(".chave"); if(!b) return; const k=b.dataset.k; E.config[k]=!E.config[k]; b.classList.toggle("on"); api("config",{[k]:E.config[k]}); });
+$("#ajustes").addEventListener("input", e => { if(e.target.dataset.k) $("#v_"+e.target.dataset.k).textContent=(+e.target.value).toFixed(2); });
+$("#ajustes").addEventListener("change", e => { const k=e.target.dataset.k; if(k){ E.config[k]=+e.target.value; api("config",{[k]:+e.target.value}); } });
+
+const ICONE_LOG = {fala:"🔊",novo:"🆕",ok:"✔",aviso:"⚠",erro:"✖"};
+function logs(novo){
+  const reg = $("#registro");
+  const linha = l => `<div class="l-${l.tipo}"><time>${l.hora}</time><span>${esc(l.texto)}</span></div>`;
+  if (novo){ reg.insertAdjacentHTML("afterbegin", linha(novo)); while (reg.children.length>300) reg.lastChild.remove(); }
+  else reg.innerHTML = (E.log||[]).slice().reverse().map(linha).join("");
+  $("#ticker").innerHTML = (E.log||[]).filter(l=>l.tipo!=="fala").slice(-6).reverse().map(l=>`<div class="l-${l.tipo}" title="${esc(l.texto)}">${l.hora} · ${esc(l.texto)}</div>`).join("");
+}
+
+// ---------------------------------------------------------------- topo: botoes
+$("#btnPausar").onclick = () => api("pausar");
+$("#btnRepetir").onclick = () => api("repetir");
+$("#motorSeg").onclick = e => { const b=e.target.closest("button"); if(!b) return; api("config",{motor:b.dataset.m}); E.config.motor=b.dataset.m; sistema(); toast(b.dataset.m==="clonada"?"Voz clonada (carrega em ~20 s na 1ª vez)":"Voz rápida"); };
+$("#abas").onclick = e => { const b=e.target.closest("button"); if(!b) return;
+  document.querySelectorAll("#abas button").forEach(x=>x.classList.toggle("on",x===b));
+  document.querySelectorAll(".aba").forEach(x=>x.classList.toggle("on",x.id==="aba-"+b.dataset.a));
+  if (b.dataset.a==="caixa") { carregarFontes(); if (!$("#foto img")) atualizarFoto(); } };
+// na aba da caixa, atualiza sozinho a foto e os retangulos (o que o programa esta vendo)
+setInterval(async () => {
+  if (!document.querySelector('#abas button[data-a="caixa"]').classList.contains("on") || modo) return;
+  try { const e = await fetch("/api/estado").then(r => r.json());
+        E.video = e.video; E.legenda_lida = e.legenda_lida; E.modo_legenda = e.modo_legenda; E.regiao = e.regiao;
+        atualizarFoto(); caixaInfo(); } catch (_) {}
+}, 2500);
+$("#chFixar").onclick = () => { const on=!$("#chFixar").classList.contains("on"); api("fixar_jogo",{fixar:on}); $("#chFixar").classList.toggle("on",on); };
+
+// ---------------------------------------------------------------- caixa de dialogo
+let modo = null, ini = null, novo = null;
+function atualizarFoto(){
+  const foto = $("#foto"); const img = new Image();
+  img.onload = () => { foto.innerHTML = ""; foto.appendChild(img); desenharRets(); };
+  img.onerror = () => { foto.innerHTML = `<span style="color:var(--suave)">Nenhum jogo aberto (ou minimizado)</span>`; };
+  img.src = "/api/quadro?t=" + Date.now(); img.draggable = false;
+}
+function desenharRets(){
+  const foto = $("#foto"); if (!foto.querySelector("img")) return;
+  foto.querySelectorAll(".ret").forEach(r=>r.remove());
+  const r = E.regiao;
+  const add = (x0,y0,x1,y1,cls,t) => { const d=document.createElement("div"); d.className="ret "+cls;
+    Object.assign(d.style,{left:x0*100+"%",top:y0*100+"%",width:(x1-x0)*100+"%",height:(y1-y0)*100+"%"}); d.innerHTML=`<span>${t}</span>`; foto.appendChild(d); return d; };
+  if (E.modo_legenda) {
+    // video achado pelo movimento e onde a ultima legenda foi lida
+    if (E.video) add(...E.video, "video", "vídeo detectado");
+    if (E.legenda_lida) add(...E.legenda_lida, "", "legenda");
+  } else if (r) add(...r,"","texto");
+  const z = E.zona_nome;
+  if (r && z) { const w=r[2]-r[0], h=r[3]-r[1]; add(r[0]+z[0]*w, r[1]+z[1]*h, r[0]+z[2]*w, r[1]+z[3]*h, "nome","nome"); }
+}
+function frac(e){ const b=$("#foto img").getBoundingClientRect(); return [Math.min(1,Math.max(0,(e.clientX-b.left)/b.width)), Math.min(1,Math.max(0,(e.clientY-b.top)/b.height))]; }
+$("#btnFoto").onclick = atualizarFoto;
+async function carregarFontes(){
+  const r = await fetch("/api/janelas").then(r=>r.json()).catch(()=>({janelas:[],monitores:1}));
+  const c = E.config || {}; const atual = c.fonte==="tela" ? "tela:"+(c.fonte_monitor||0) : c.fonte==="janela" ? "janela:"+c.fonte_hwnd : "auto";
+  let html = `<option value="auto">🎮 Jogo aberto (automático)</option>`;
+  for (let i=0;i<r.monitores;i++) html += `<option value="tela:${i}">🖥 Tela inteira${r.monitores>1?` — monitor ${i+1}`:""}</option>`;
+  html += r.janelas.map(j=>`<option value="janela:${j.hwnd}">🪟 ${esc(j.titulo)} (${esc(j.exe)})${j.minimizada?" — minimizada":""}</option>`).join("");
+  if (c.fonte==="janela" && !r.janelas.some(j=>j.hwnd==c.fonte_hwnd)) html += `<option value="${atual}">🪟 ${esc(E.jogo?E.jogo.titulo:"janela escolhida")}</option>`;
+  $("#fonteSel").innerHTML = html; $("#fonteSel").value = atual;
+}
+$("#btnJanelas").onclick = carregarFontes;
+$("#fonteSel").onchange = e => { const [tipo,v] = e.target.value.split(":");
+  api("fonte", tipo==="janela"?{tipo,hwnd:+v}:tipo==="tela"?{tipo,monitor:+v}:{tipo});
+  E.config.fonte=tipo; if(tipo==="janela") E.config.fonte_hwnd=+v; if(tipo==="tela") E.config.fonte_monitor=+v;
+  toast("Fonte trocada"); setTimeout(atualizarFoto, 900); };
+$("#jogo").style.cursor="pointer";
+$("#jogo").onclick = () => { document.querySelector('#abas button[data-a="caixa"]').click(); carregarFontes(); };
+$("#btnMarcar").onclick = () => { if(!$("#foto img")) return toast("Atualize a foto com o jogo aberto"); modo="texto"; $("#foto").classList.add("desenhando"); toast("Arraste sobre o texto do diálogo"); };
+$("#btnNome").onclick = () => { if(!E.regiao) return toast("Marque a caixa de diálogo primeiro"); if(!$("#foto img")) return toast("Atualize a foto"); modo="nome"; $("#foto").classList.add("desenhando"); toast("Arraste sobre o nome de quem fala"); };
+$("#btnAuto").onclick = () => { api("regiao",{auto:true}); toast("Procurando sozinho nos próximos diálogos"); };
+$("#btnTiraNome").onclick = () => api("zona_nome",{zona:null});
+$("#foto").addEventListener("mousedown", e => { if(!modo) return; ini=frac(e); novo=document.createElement("div"); novo.className="ret "+(modo==="nome"?"nome":""); $("#foto").appendChild(novo); });
+window.addEventListener("mousemove", e => { if(!ini||!novo) return; const p=frac(e); const x0=Math.min(ini[0],p[0]),y0=Math.min(ini[1],p[1]),x1=Math.max(ini[0],p[0]),y1=Math.max(ini[1],p[1]);
+  Object.assign(novo.style,{left:x0*100+"%",top:y0*100+"%",width:(x1-x0)*100+"%",height:(y1-y0)*100+"%"}); novo._r=[x0,y0,x1,y1]; });
+window.addEventListener("mouseup", () => { if(!ini) return; const r=novo&&novo._r; ini=null; $("#foto").classList.remove("desenhando");
+  if (r && r[2]-r[0]>0.02 && r[3]-r[1]>0.01){
+    if (modo==="texto"){ api("regiao",{regiao:r}); E.regiao=r; toast("Caixa de diálogo salva ✔"); }
+    else { const g=E.regiao, w=g[2]-g[0], h=g[3]-g[1]; const z=[(r[0]-g[0])/w,(r[1]-g[1])/h,(r[2]-g[0])/w,(r[3]-g[1])/h].map(v=>Math.round(Math.min(1,Math.max(0,v))*1e4)/1e4); api("zona_nome",{zona:z}); E.zona_nome=z; toast("Zona do nome salva ✔"); }
+  }
+  modo=null; desenharRets(); caixaInfo(); });
+
+conectar();
+</script>
+</body>
+</html>

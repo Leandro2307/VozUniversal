@@ -1,0 +1,24 @@
+# pessoal / gerado ao usar
+config.json
+abafar_estado.json
+log.txt
+perfis/
+diagnostico/
+testes/resultados/
+recursos/janela/
+__pycache__/
+*.pyc
+
+# pesados: o instalador baixa sozinho
+recursos/piper_vozes/
+banco_vozes/*/latentes.pt
+banco_vozes/_originais/
+banco_vozes/_antigas/
+
+# gerados pelo instalador
+dist/
+build/
+instalador/build/
+instalador/programa.zip
+*.spec
+Iniciar Voz Universal.bat

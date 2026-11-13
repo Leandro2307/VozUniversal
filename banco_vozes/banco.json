@@ -1,0 +1,162 @@
+{
+  "menino_1": {
+    "nome": "Tico",
+    "categoria": "menino",
+    "descricao": "moleque travesso e esperto",
+    "tom": 1.05,
+    "velocidade": 1.03,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.12
+    }
+  },
+  "menino_2": {
+    "nome": "Pedrinho",
+    "categoria": "menino",
+    "descricao": "garoto mimado e animado",
+    "tom": 0.96,
+    "velocidade": 1.04,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-FranciscaNeural",
+      "tom": 1.1
+    }
+  },
+  "menina_1": {
+    "nome": "Lia",
+    "categoria": "menina",
+    "descricao": "menina doce e alegre",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-FranciscaNeural",
+      "tom": 1.22
+    }
+  },
+  "menina_2": {
+    "nome": "Bia",
+    "categoria": "menina",
+    "descricao": "menina alegre e espevitada",
+    "tom": 1.1,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.25
+    }
+  },
+  "homem_1": {
+    "nome": "Rogério",
+    "categoria": "homem",
+    "descricao": "grave e bonachão",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "piper",
+      "voz": "pt_BR-cadu-medium",
+      "tom": 0.97
+    }
+  },
+  "homem_2": {
+    "nome": "Henrique",
+    "categoria": "homem",
+    "descricao": "voz suave e calma de homem",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "piper",
+      "voz": "pt_BR-jeff-medium",
+      "tom": 1.0
+    }
+  },
+  "mulher_1": {
+    "nome": "Lívia",
+    "categoria": "mulher",
+    "descricao": "firme e protetora",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-FranciscaNeural",
+      "tom": 1.0
+    }
+  },
+  "mulher_2": {
+    "nome": "Sara",
+    "categoria": "mulher",
+    "descricao": "confiante, voz de guerreira",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0
+    }
+  },
+  "idoso_1": {
+    "nome": "Seu Benedito",
+    "categoria": "idoso",
+    "descricao": "ancião sábio, voz profunda",
+    "tom": 1.0,
+    "velocidade": 0.96,
+    "rapida": {
+      "motor": "piper",
+      "voz": "pt_BR-cadu-medium",
+      "tom": 0.84,
+      "velocidade": 0.92
+    }
+  },
+  "idoso_2": {
+    "nome": "Seu Jorge",
+    "categoria": "idoso",
+    "descricao": "velho resmungão",
+    "tom": 0.97,
+    "velocidade": 0.95,
+    "rapida": {
+      "motor": "piper",
+      "voz": "pt_BR-jeff-medium",
+      "tom": 0.86,
+      "velocidade": 0.9
+    }
+  },
+  "idosa_1": {
+    "nome": "Dona Vera",
+    "categoria": "idosa",
+    "descricao": "senhora agitada (provisória: troque por uma voz de idosa de verdade)",
+    "tom": 0.93,
+    "velocidade": 0.92,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-FranciscaNeural",
+      "tom": 0.9,
+      "velocidade": 0.9
+    }
+  },
+  "idosa_2": {
+    "nome": "Dona Cida",
+    "categoria": "idosa",
+    "descricao": "senhora calma (provisória: troque por uma voz de idosa de verdade)",
+    "tom": 0.9,
+    "velocidade": 0.9,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 0.88,
+      "velocidade": 0.9
+    }
+  },
+  "narrador": {
+    "nome": "Narrador",
+    "categoria": "narrador",
+    "descricao": "textos sem nome (itens, avisos, placas)",
+    "tom": 1.0,
+    "velocidade": 1.05,
+    "rapida": {
+      "motor": "piper",
+      "voz": "pt_BR-faber-medium",
+      "tom": 1.0
+    }
+  }
+}
