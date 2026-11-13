@@ -220,6 +220,7 @@ select{background:var(--card2);color:var(--texto);border:1px solid var(--linha);
         <div class="status-linha"><span>Voz clonada</span><span id="stClonada">—</span></div>
         <div class="status-linha"><span>Usando agora</span><span id="stUsando">—</span></div>
         <div class="status-linha"><span>Visão (quem fala)</span><span id="stVisao">—</span></div>
+        <div class="status-linha"><span>Escuta (voz original)</span><span id="stEscuta">—</span></div>
         <div class="status-linha"><span>Caixa de diálogo</span><span id="stCaixa">—</span></div>
         <div class="status-linha" title="Tempo entre o texto aparecer e a voz começar (últimas 20 falas)"><span>Atraso da voz</span><span id="stAtraso">—</span></div>
         <div class="status-linha" title="Silêncios no meio de uma fala desde que o programa abriu"><span>Picotes</span><span id="stPicotes">0</span></div>
@@ -354,6 +355,8 @@ function sistema(){
   $("#stUsando").textContent = m.usando === "clonada" ? "✨ clonada" : "⚡ rápida";
   const vi = {pronta:["pronta","verde"],carregando:["carregando…","amarelo"],erro:["indisponível","vermelho"],espera:["carrega ao abrir",""],desligada:["desligada",""]}[m.visao] || ["—",""];
   $("#stVisao").textContent = vi[0]; $("#stVisao").className = vi[1];
+  const es = {pronta:["pronta","verde"],carregando:["carregando…","amarelo"],erro:["indisponível","vermelho"],desligada:["desligada",""]}[m.escuta] || ["—",""];
+  $("#stEscuta").textContent = es[0]; $("#stEscuta").className = es[1];
   document.querySelectorAll("#motorSeg button").forEach(b=>b.classList.toggle("on", b.dataset.m === (E.config.motor||m.escolhido)));
 }
 
@@ -445,6 +448,7 @@ function ajustes(){
     ch("abafar_jogo","Abafar o jogo","Abaixa o som do jogo/vídeo enquanto a voz em português fala (a voz original em inglês fica no fundo; a música volta logo depois)") +
     fx("abafar_nivel","Volume do jogo abafado","0 = mudo · 0,25 = recomendado · 1 = sem abafar",0,1,0.05) +
     ch("visao","Visão","Olha a imagem do personagem para descobrir sexo e idade") +
+    ch("escuta","Escutar a voz original","Ouve a voz do jogo/vídeo (em inglês) para saber se é homem, mulher ou criança — funciona até em legenda sem nome, como no GTA") +
     ch("auto_regiao","Achar a caixa sozinho","Procura onde aparecem os diálogos em jogo novo") +
     ch("interromper_ao_avancar","Cortar ao avançar","Ligado: a fala anterior para na hora. Desligado: ela acelera para alcançar a nova") +
     ch("acelerar_se_atrasado","Alcançar o texto","Fala um pouco mais rápido se ficou para trás");

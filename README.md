@@ -3,7 +3,8 @@
 Dá voz aos diálogos e legendas de **qualquer jogo ou vídeo**, gerada na hora.
 
 - Lê o texto da tela com o OCR do Windows: caixa de diálogo de jogo, legenda de vídeo do YouTube, tela inteira ou uma janela escolhida.
-- Descobre **quem fala**: pelo nome ("Swanson: ..."), pelo jeito de falar ("obrigada", "meu jovem") e pela imagem (opcional).
+- Descobre **quem fala**: pelo nome ("Swanson: ..."), pelo jeito de falar ("obrigada", "meu jovem"), pela imagem (opcional) e **pela voz original do jogo** (homem, mulher ou criança).
+- **Legenda sem nome** (GTA, filmes): ouve a voz original de cada fala e usa voz de homem ou de mulher em vez do narrador. Só ouve o som do jogo/navegador, nunca a própria voz em português.
 - Escolhe entre **2 vozes de cada tipo** (menino, menina, homem, mulher, idoso, idosa e narrador), com variação de tom e ritmo para cada personagem. Dois personagens nunca ficam com a mesma voz.
 - **Voz clonada (XTTS v2)** na placa de vídeo. Começa a falar ~0,2 s depois que a frase fica pronta.
 - **Fala enquanto o texto aparece**. Quando a próxima fala chega com a anterior ainda tocando, a anterior **acelera sem mudar o tom** para alcançar.
@@ -37,6 +38,7 @@ O instalador sai em `dist\Instalar Voz Universal.exe`.
 | `nucleo/tela.py` | acha a janela, captura, OCR, legenda de vídeo, nome de quem fala |
 | `nucleo/leitor.py` | decide quando cada frase (ou pedaço) está pronta para falar |
 | `nucleo/identidade.py` | sexo/idade do personagem e escolha da voz |
+| `nucleo/escuta.py` | grava só o som do jogo (loopback por processo do Windows) e diz se a voz original é de homem, mulher ou criança (Silero VAD + wav2vec2 da audEERING) |
 | `nucleo/vozes.py` | motores de voz (XTTS, Piper, Edge), fila, aceleração, alto-falante |
 | `nucleo/diagnostico.py` | registro detalhado de cada etapa (`diagnostico/*.jsonl`) |
 | `testes/unitarios.py` | testes rápidos com casos reais (nomes, OCR, filtros, frases). Rode depois de mexer no código |

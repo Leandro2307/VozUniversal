@@ -197,6 +197,70 @@ for t, esperado in [("Mover para frente trás Co Girar (segurar) n Cancelar", Tr
 confere("item em maiusculas", caixa_alta("OFERENDA LUMINOSA", dic), True)
 confere("grito sem ponto", caixa_alta("NÃO ACREDITO NISSO", dic), False)
 
+# ---- escuta da voz original: legenda SEM nome vira "Homem/Mulher (pela voz)"; incerta fica no narrador
+from nucleo.identidade import Elenco, pistas_voz   # noqa: E402
+
+
+class _PerfilE:
+    def __init__(self):
+        self.personagens = {}
+
+    def salvar(self):
+        pass
+
+
+class _Banco:
+    vozes = {v: {"nome": v} for v in ("homem_1", "homem_2", "mulher_1", "mulher_2", "menino_1", "menina_1",
+                                      "idoso_1", "idosa_1", "narrador")}
+
+    def da_categoria(self, c):
+        return [v for v in self.vozes if v.startswith(c + "_")]
+
+
+class _Escuta:
+    ativa = True
+
+    def __init__(self, res):
+        self.res = res
+
+    def ouvir(self, visto, ate=None, esperar=0.0, minimo=0.45):
+        return dict(self.res)
+
+
+def _res(sexo, certeza, crianca=0.0, voz_s=1.0):
+    return {"sexo": sexo, "p_m": 0.9 if sexo == "m" else 0.1, "crianca": crianca, "idade": 35.0,
+            "voz_s": voz_s, "certeza": certeza, "rms": 0.01}
+
+
+_e = Nucleo.__new__(Nucleo)
+_e.cfg = {"escuta": True, "escuta_espera_s": 0.0}
+_e.perfil = _PerfilE()
+_e.elenco = Elenco(_e.perfil, _Banco())
+_e._voz_pag = {}
+_e.emitir = lambda *a, **k: None
+_e.personagens = lambda: []
+import time as _t   # noqa: E402
+_e.escuta = _Escuta(_res("m", 0.9))
+r = _e._resolver_voz(1, "Ei, que porra é essa?", "narrador", 1.0, 1.0, "", "narrador", _t.time())
+confere("legenda sem nome, voz de homem", (r[3], r[4], r[0].startswith("homem")) if r else None,
+        ("Homem (pela voz)", "homem", True))
+_e.escuta = _Escuta(_res("f", 0.8))
+confere("pedaco da MESMA legenda nao troca de voz", _e._resolver_voz(1, "...continua", "narrador", 1, 1, "", "narrador",
+                                                                     _t.time())[3], "Homem (pela voz)")
+r = _e._resolver_voz(2, "Mais três champanhes, obrigada.", "narrador", 1.0, 1.0, "", "narrador", _t.time())
+confere("legenda sem nome, voz de mulher", (r[3], r[0].startswith("mulher")) if r else None, ("Mulher (pela voz)", True))
+_e.escuta = _Escuta(_res("m", 0.2))
+confere("voz incerta fica no narrador", _e._resolver_voz(3, "Hã.", "narrador", 1, 1, "", "narrador", _t.time()), None)
+_e.escuta = _Escuta(_res(None, 0.0, voz_s=0.0))
+confere("sem fala (so musica) fica no narrador", _e._resolver_voz(4, "Polícia!", "narrador", 1, 1, "", "narrador",
+                                                                  _t.time()), None)
+# personagem com nome novo: a voz original decide a 1a voz dele
+_e.escuta = _Escuta(_res("f", 0.9))
+_e.elenco.observar("Lu")                                # nome sem pista nenhuma -> homem (padrao)
+r = _e._resolver_voz(5, "Cobertura!", "homem_1", 1, 1, "Lu", "homem", _t.time())
+confere("nome novo + voz de mulher -> mulher", r[4] if r else None, "mulher")
+confere("pista de voz fraca nao vale", pistas_voz(_res("m", 0.1)), [])
+
 print(f"{'TUDO CERTO' if not falhas else 'FALHAS'}: {len(falhas)} problema(s)")
 for f in falhas:
     print("  ✗", f)

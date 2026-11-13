@@ -1,3 +1,18 @@
+# Novidade de 13/11 (tarde): escuta a voz original (homem ou mulher)
+
+- **Ouve a voz original do jogo/vídeo** e descobre se quem fala é homem, mulher ou criança.
+- **Legenda sem nome (GTA, filmes):** antes, tudo saía na voz do Narrador. Agora cada fala vai para **"Homem (pela voz)"** ou **"Mulher (pela voz)"**, cada um com voz própria. Se a voz não der para saber (música alta, tiroteio, grito curto), continua no narrador.
+- **Personagem com nome novo:** a voz original entra como mais uma pista, junto com o nome, o texto e a imagem. Ela vale tanto quanto um nome claro.
+- **Só ouve o jogo:** grava apenas o som do programa do jogo ou do navegador. A voz em português, Spotify e Discord ficam de fora. Precisa do Windows 10 (2004 ou mais novo) ou 11.
+- **Como funciona:** um detector de fala (Silero VAD, 2 MB) separa a voz de música, tiros e motor. Depois um modelo neural (audEERING, ~360 MB, baixa sozinho na 1ª vez) diz o sexo. Roda no processador, ~0,08 s por fala.
+- **Testado no trailer do GTA 6 legendado:**
+  - 13 vozes do banco, com e sem música por cima: 302 de 302 trechos certos;
+  - teste ao vivo de 10 min: 144 falas, e o app bateu com um gabarito independente em 98 de 102. Pelo contexto, parte das discordâncias é erro do próprio gabarito;
+  - com a regra final (decide assim que tiver 0,3 s de fala com o modelo convicto), simulada nos áudios reais: 104 certas, 4 discordâncias, 12 no narrador.
+- **Atraso:** a decisão sai ~0,5 s depois da legenda aparecer (mediana). O máximo de espera é 1 s.
+- **Na aba Ajustes:** "Escutar a voz original" liga e desliga. O status aparece em "Escuta (voz original)". No config.json: `escuta_espera_s` (padrão 1.0) e `escuta_certeza` (padrão 0.35).
+- **Errou a voz de alguém?** Corrija "Homem (pela voz)" ou "Mulher (pela voz)" no painel, como qualquer personagem.
+
 # Novidade de 13/11 (tarde): voz clonada em PC sem placa NVIDIA
 
 Testado num notebook com i7-13620H, 8 GB de RAM e só a placa Intel (sem NVIDIA).

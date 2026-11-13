@@ -177,7 +177,7 @@ def iniciar(nucleo, porta):
             n.testar_voz(d.get("voz", "narrador"), d.get("texto"), float(d.get("tom", 1)), float(d.get("vel", 1)))
         elif nome == "config":
             for k, v in d.items():
-                if k in ("volume", "velocidade", "motor", "visao", "auto_regiao", "jogo_fixo",
+                if k in ("volume", "velocidade", "motor", "visao", "escuta", "auto_regiao", "jogo_fixo",
                          "interromper_ao_avancar", "acelerar_se_atrasado", "abafar_jogo", "abafar_nivel"):
                     n.mudar_config(k, v)
         elif nome == "fonte":

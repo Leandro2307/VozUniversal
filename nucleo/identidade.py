@@ -285,6 +285,19 @@ def pistas_visao(prob):
     return saida
 
 
+def pistas_voz(res):
+    """Analise da voz ORIGINAL do jogo (escuta.analisar) -> pistas. Com certeza alta vale tanto
+    quanto um nome claro ("Dona", "Rei"); com certeza baixa quase nada (musica, duas vozes)."""
+    if not res or not res.get("sexo") or res.get("certeza", 0) < 0.25:
+        return []
+    f0 = res.get("f0") or 0
+    saida = [("s", res["sexo"], round(3.0 * res["certeza"], 2),
+              f"voz original {'masculina' if res['sexo'] == 'm' else 'feminina'} ({f0:.0f} Hz)")]
+    if res.get("crianca", 0) >= 0.5 and res["certeza"] >= 0.4:
+        saida.append(("i", "crianca", round(1.5 * res["crianca"], 2), f"voz original de criança ({f0:.0f} Hz)"))
+    return saida
+
+
 # ----------------------------------------------------------------- elenco: fichas + escolha de voz
 VARIACOES = [(1.0, 1.0), (1.06, 0.97), (0.94, 1.03), (1.1, 1.0), (0.9, 0.98), (1.03, 1.06), (0.97, 0.94),
              (1.13, 1.03), (0.88, 1.02), (1.08, 0.93)]
@@ -402,6 +415,64 @@ class Elenco:
                     + (f" [{', '.join(f['pistas'][:3])}]" if f["pistas"] else ""), tipo="novo")
             self.perfil.salvar()
             return f
+
+    def ouvir(self, nome, res):
+        """Soma na ficha o que a voz original do jogo disse (homem/mulher/crianca). So as 6 primeiras
+        falas ouvidas contam (depois a ficha ja esta decidida e nao fica mudando de voz)."""
+        with self.trava:
+            f = self.perfil.personagens.get(nome)
+            if not f or f.get("fixo") or f.get("ouvidas", 0) >= 6:
+                return f
+            pistas = pistas_voz(res)
+            if not pistas:
+                return f
+            f["ouvidas"] = f.get("ouvidas", 0) + 1
+            pontos = f.setdefault("pontos", {})
+            for dim, val, peso, motivo in pistas:
+                d = pontos.setdefault(dim, {})
+                d[val] = round(d.get(val, 0) + peso, 2)
+                f["pistas"] = (f.get("pistas", []) + [motivo])[-8:]
+            cat, conf = self._decidir(pontos)
+            f["confianca"] = round(conf, 2)
+            tarde = f.get("falas", 0) > 6
+            if cat != f.get("categoria") and (not tarde or (conf >= 0.8 and not f.get("mudou_tarde"))):
+                if tarde:
+                    f["mudou_tarde"] = True
+                if f.get("categoria"):
+                    log(f"🎧 {nome}: pela voz original parece {ROTULOS[cat].lower()} "
+                        f"(antes {ROTULOS[f['categoria']].lower()}).")
+                f["categoria"] = cat
+                f["voz"], f["tom"], f["vel"] = self._voz_para(nome, cat)
+            try:
+                from .diagnostico import diag
+                diag.ev("ficha_voz", nome=nome, categoria=f["categoria"], voz=f["voz"], confianca=f["confianca"],
+                        pistas=[m for *_, m in pistas], pontos=pontos)
+            except Exception:
+                pass
+            self.perfil.salvar()
+            return f
+
+    def anonimo(self, categoria):
+        """Fala SEM nome (legenda de GTA, filme...) em que a voz original foi reconhecida -> ficha
+        "Homem (pela voz)", "Mulher (pela voz)"... com voz propria (diferente dos personagens com
+        nome que estao na cena). Corrigindo no painel, a correcao vale para as proximas."""
+        with self.trava:
+            pers = self.perfil.personagens
+            nome = f"{ROTULOS[categoria]} (pela voz)"
+            novo = nome not in pers
+            f = pers.setdefault(nome, {"categoria": categoria, "voz": None, "tom": 1.0, "vel": 1.0,
+                                       "confianca": 1.0, "fixo": False, "pistas": ["voz original"], "pontos": {},
+                                       "falas": 0, "olhadas": 0, "anonimo": True,
+                                       "primeira_vez": time.strftime("%d/%m %H:%M")})
+            f["falas"] = f.get("falas", 0) + 1
+            f["ultima_t"] = f["ultima_vez"] = time.time()
+            if not f.get("voz") or f["voz"] not in self.banco.vozes:
+                f["voz"], f["tom"], f["vel"] = self._voz_para(nome, f["categoria"])
+            if novo:
+                v = self.banco.vozes.get(f["voz"], {})
+                log(f"🎧 Voz original reconhecida: {nome} → voz {v.get('nome', f['voz'])}", tipo="novo")
+            self.perfil.salvar()
+            return nome, f
 
     def corrigir(self, nome, categoria=None, voz=None, tom=None, vel=None):
         """O usuario corrigiu no painel: trava a ficha."""

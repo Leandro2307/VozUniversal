@@ -89,6 +89,9 @@ PADRAO = {
     "volume": 0.9,
     "velocidade": 1.05,
     "visao": True,                 # olhar a imagem do personagem para descobrir sexo/idade
+    "escuta": True,                # ouvir a voz original do jogo (homem/mulher/crianca), ate em legenda sem nome
+    "escuta_espera_s": 1.0,        # quanto esperar (desde a legenda aparecer) ouvindo a voz antes de falar
+    "escuta_certeza": 0.35,        # certeza minima para trocar o narrador por voz de homem/mulher
     "narrador_sem_nome": True,     # texto sem nome de quem fala: voz do narrador
     "auto_regiao": True,           # descobrir sozinho onde fica a caixa de dialogo
     "intervalo_ms": 110,

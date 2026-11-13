@@ -699,6 +699,9 @@ class Narrador:
         # quantos segundos de voz a clonada gera por segundo (medido a cada fala). Na placa de video
         # passa de 1 (nao precisa esperar); no processador fica ~0,5 e o colchao adaptativo usa isso
         self.taxa_geracao = {}
+        # escolhe a voz NA HORA de gerar (o nucleo ouve a voz original do jogo e decide se e homem
+        # ou mulher): fn(pag, texto, voz, tom, vel, quem, cat, visto) -> (voz, tom, vel, quem, cat) ou None
+        self.resolver_voz = None
         threading.Thread(target=self._sintetizar, daemon=True).start()
         threading.Thread(target=self._tocar, daemon=True).start()
 
@@ -837,6 +840,16 @@ class Narrador:
             if not forcar and self._repetido(texto):
                 diag.ev("descartada", id=fid, motivo="repetida")
                 continue
+            if self.resolver_voz:
+                try:
+                    r = self.resolver_voz(pag, texto, voz, tom, vel, quem, cat, visto)
+                    if r:
+                        voz, tom, vel, quem, cat = r
+                except Exception as e:
+                    diag.ev("resolver_voz_erro", id=fid, erro=repr(e)[:160])
+                if self._velha(ger, pag):
+                    diag.ev("descartada", id=fid, motivo="ficou para trás enquanto ouvia a voz")
+                    continue
             pressa = self._pressa(visto, pag)
             d = self.banco.vozes.get(voz, {})
             vel_total = vel * float(d.get("velocidade", 1.0)) * float(self.cfg.get("velocidade", 1.0)) * pressa

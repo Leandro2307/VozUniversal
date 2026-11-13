@@ -31,6 +31,17 @@ class Nucleo:
         from .abafar import Abafador
         self.exe_frente = ""               # programa da janela da frente (modo tela/video)
         self.abafador = Abafador(cfg, self.narr, self._exe_do_som)
+        self.pid_frente = 0                # processo da janela da frente (de onde vem o som)
+        # ouve a voz ORIGINAL do jogo para saber se quem fala e homem, mulher ou crianca
+        self.escuta = None
+        self._voz_pag = {}                 # legenda -> voz decidida (os pedacos da mesma legenda nao trocam)
+        if cfg.get("escuta", True):
+            try:
+                from .escuta import Escuta
+                self.escuta = Escuta(cfg, self._pid_do_som, lambda: self.narr.falando)
+                self.narr.resolver_voz = self._resolver_voz
+            except Exception as e:
+                log("Escuta da voz original indisponível:", repr(e), tipo="aviso")
         self.dic = Dicionario()
         self.visao = Visao() if cfg.get("visao", True) else None
         self.jan = Janela(cfg)
@@ -79,7 +90,18 @@ class Nucleo:
                 "visao": ("pronta" if self.visao and self.visao.pronta else
                           "erro" if self.visao and self.visao.erro else
                           "carregando" if self.visao and self.visao.carregando else
-                          "espera" if self.visao and self.cfg.get("visao", True) else "desligada")}
+                          "espera" if self.visao and self.cfg.get("visao", True) else "desligada"),
+                "escuta": self._estado_escuta()}
+
+    def _estado_escuta(self):
+        e = self.escuta
+        if not e or not self.cfg.get("escuta", True):
+            return "desligada"
+        if e.ouvido.erro or (not e.grav.modo and e.grav.erro):
+            return "erro"
+        if e.ativa:
+            return "pronta"
+        return "carregando"
 
     def personagens(self):
         if not self.perfil:
@@ -107,7 +129,7 @@ class Nucleo:
             "video": self.video.rect,
             "legenda_lida": self.legenda_frac if self._modo_legenda() else None,
             "motor": self.estado_motor(),
-            "config": {k: cfg.get(k) for k in ("volume", "velocidade", "motor", "visao", "auto_regiao",
+            "config": {k: cfg.get(k) for k in ("volume", "velocidade", "motor", "visao", "escuta", "auto_regiao",
                                                 "jogo_fixo", "interromper_ao_avancar", "acelerar_se_atrasado",
                                                 "fonte", "fonte_hwnd", "fonte_monitor")},
             "banco": self.banco.resumo(),
@@ -133,6 +155,13 @@ class Nucleo:
         self.salvar_config()
         if chave == "motor" and valor == "clonada":
             self.narr.ligar_clonada()
+        if chave == "escuta" and valor and not self.escuta:
+            try:
+                from .escuta import Escuta
+                self.escuta = Escuta(self.cfg, self._pid_do_som, lambda: self.narr.falando)
+                self.narr.resolver_voz = self._resolver_voz
+            except Exception as e:
+                log("Escuta da voz original indisponível:", repr(e), tipo="aviso")
         if chave == "visao" and valor and not self.visao:
             self.visao = Visao()
         if chave == "jogo_fixo":
@@ -319,6 +348,7 @@ class Nucleo:
             bloquear = bloquear or exe.startswith("instalar voz universal")    # o proprio instalador
             if exe and not bloquear:
                 self.exe_frente = exe          # de onde vem o som do jogo/video (para abafar)
+                self.pid_frente = pid          # (e para ouvir a voz original)
             if bloquear != getattr(self, "frente_bloqueada", False):
                 self.frente_bloqueada = bloquear
                 diag.ev("frente_programa_comum" if bloquear else "frente_liberada", exe=exe)
@@ -556,6 +586,63 @@ class Nucleo:
         if e.endswith(".exe"):
             return e
         return self.exe_frente
+
+    def _pid_do_som(self):
+        """Processo cujo som e ouvido (voz original): a janela do jogo ou, no modo tela/video, a da frente."""
+        try:
+            e = (self.jan.exe or "").lower()
+            if e.endswith(".exe") and self.jan.raiz:
+                import win32process
+                return win32process.GetWindowThreadProcessId(self.jan.raiz)[1]
+        except Exception:
+            pass
+        return self.pid_frente
+
+    def _resolver_voz(self, pag, texto, voz, tom, vel, quem, cat, visto):
+        """Chamado pelo narrador logo antes de gerar cada fala: ouve a voz original do jogo.
+        - fala SEM nome (legenda): se a voz for claramente de homem/mulher/crianca, usa a ficha
+          "Homem (pela voz)" etc. em vez do narrador;
+        - personagem com nome ainda novo: soma a voz na ficha antes de falar (escolhe a voz certa ja
+          na 1a fala); depois disso so ouve em segundo plano, para confirmar."""
+        esc = self.escuta
+        if not esc or not esc.ativa or not self.cfg.get("escuta", True) or not self.elenco:
+            return None
+        if pag in self._voz_pag:
+            return self._voz_pag[pag]
+        if len(self._voz_pag) > 50:
+            for k in sorted(self._voz_pag)[:25]:
+                self._voz_pag.pop(k, None)
+        espera = float(self.cfg.get("escuta_espera_s", 1.0))
+        r = None
+        if cat == "narrador" or not quem:
+            res = esc.ouvir(visto, esperar=max(0.0, visto + espera - time.time()))
+            decisao = None
+            if res["sexo"] and (res.get("cedo") or res["certeza"] >= float(self.cfg.get("escuta_certeza", 0.35))):
+                from .identidade import categoria_de
+                categoria = categoria_de(res["sexo"], "crianca" if res["crianca"] >= 0.6 else "adulto")
+                nome, f = self.elenco.anonimo(categoria)
+                r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), nome, f["categoria"])
+                decisao = nome
+            diag.ev("escuta_fala", texto=texto[:60], quem="", decisao=decisao, **res)
+        else:
+            f = self.elenco.ficha(quem)
+            if f and not f.get("fixo") and not f.get("anonimo") and f.get("ouvidas", 0) < 6:
+                if f.get("falas", 0) <= 2:
+                    res = esc.ouvir(visto, esperar=max(0.0, visto + espera - time.time()))
+                    f = self.elenco.ouvir(quem, res) or f
+                    r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), quem, f["categoria"])
+                    diag.ev("escuta_fala", texto=texto[:60], quem=quem, decisao=f["categoria"], **res)
+                else:
+                    def depois():
+                        time.sleep(max(0.0, visto + 3.0 - time.time()))
+                        res2 = esc.ouvir(visto, ate=visto + 3.0)
+                        diag.ev("escuta_fala", texto=texto[:60], quem=quem, decisao="(fundo)", **res2)
+                        self.elenco.ouvir(quem, res2)
+                    threading.Thread(target=depois, daemon=True).start()
+        self._voz_pag[pag] = r
+        if r:
+            self.emitir("personagens", self.personagens())
+        return r
 
     def _nomes_no_texto(self, fala):
         """Nome de personagem conhecido que perdeu a 1a letra no OCR: "Siga o utch." -> "Siga o Dutch."
