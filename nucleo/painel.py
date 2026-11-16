@@ -178,7 +178,8 @@ def iniciar(nucleo, porta):
         elif nome == "config":
             for k, v in d.items():
                 if k in ("volume", "velocidade", "motor", "visao", "escuta", "auto_regiao", "jogo_fixo",
-                         "interromper_ao_avancar", "acelerar_se_atrasado", "abafar_jogo", "abafar_nivel"):
+                         "interromper_ao_avancar", "acelerar_se_atrasado", "abafar_jogo", "abafar_nivel",
+                         "voz_unica"):
                     n.mudar_config(k, v)
         elif nome == "fonte":
             n.pedir(lambda: n.mudar_fonte(d.get("tipo", "auto"), d.get("hwnd", 0), d.get("monitor", 0)))

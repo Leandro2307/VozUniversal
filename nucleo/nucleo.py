@@ -16,35 +16,60 @@ from .diagnostico import diag
 from .identidade import Elenco, ROTULOS, Visao
 from .leitor import Leitor
 from .perfil import Perfil
-from .tela import (Descobridor, DetectorVideo, Dicionario, Janela, achar_legenda, capturar, em_ordem, limpar, ocr_linhas, regiao_em_tela,
-                   separar_nome, nome_estavel, suavizar)
+from .tela import (Descobridor, DetectorVideo, Dicionario, eh_relogio,Janela, achar_legenda, capturar, em_ordem, limpar, ocr_linhas, regiao_em_tela,
+                   separar_nome, nome_estavel, suavizar, isolar_contorno)
 from .util import FIM, gravar_json, CONFIG, historico_log, log, normalizar, ouvir_log, semelhanca
 from .vozes import Banco, Narrador
 
+
+
+NAVEGADORES = {"chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "opera_gx.exe", "brave.exe", "vivaldi.exe"}
+
+
+def _ret_visivel(h):
+    """Retangulo VISIVEL da janela. GetWindowRect inclui uma borda invisivel de ~8 px: maximizada,
+    a janela "ia" ate 1040 px, mas a barra de tarefas comeca em 1032 (a area da legenda caia nela)."""
+    import ctypes
+    from ctypes import wintypes
+    try:
+        r = wintypes.RECT()
+        if ctypes.windll.dwmapi.DwmGetWindowAttribute(wintypes.HWND(h), 9, ctypes.byref(r), ctypes.sizeof(r)) == 0:
+            return r.left, r.top, r.right, r.bottom          # DWMWA_EXTENDED_FRAME_BOUNDS
+    except Exception:
+        pass
+    import win32gui
+    return win32gui.GetWindowRect(h)
 
 class Nucleo:
     def __init__(self, cfg):
         self.cfg = cfg
         self.ouvintes = []                 # funcoes do painel que recebem os eventos
         self.banco = Banco()
+        try:
+            from .util import medidor_placa
+            medidor_placa()                    # comeca a medir o uso da placa de video ja na abertura
+        except Exception:
+            pass
         self.narr = Narrador(cfg, self.banco, aviso=self.emitir)
         from .abafar import Abafador
         self.exe_frente = ""               # programa da janela da frente (modo tela/video)
+        self.jan = Janela(cfg)            # antes do abafador: a linha dele ja usa self.jan
         self.abafador = Abafador(cfg, self.narr, self._exe_do_som)
         self.pid_frente = 0                # processo da janela da frente (de onde vem o som)
         # ouve a voz ORIGINAL do jogo para saber se quem fala e homem, mulher ou crianca
         self.escuta = None
         self._voz_pag = {}                 # legenda -> voz decidida (os pedacos da mesma legenda nao trocam)
+        self._oposto = {}                  # legenda da 2a pessoa ("- A. - B.") -> legenda da 1a
         if cfg.get("escuta", True):
             try:
                 from .escuta import Escuta
                 self.escuta = Escuta(cfg, self._pid_do_som, lambda: self.narr.falando)
                 self.narr.resolver_voz = self._resolver_voz
+                self.narr.candidatas_voz = self._candidatas_voz
             except Exception as e:
                 log("Escuta da voz original indisponível:", repr(e), tipo="aviso")
         self.dic = Dicionario()
         self.visao = Visao() if cfg.get("visao", True) else None
-        self.jan = Janela(cfg)
         self.perfil = None
         self.elenco = None
         self.leitor = Leitor(cfg)
@@ -55,6 +80,7 @@ class Nucleo:
         self.ultimo_falando = None
         self.ult_nomes = collections.deque(maxlen=8)
         self.ult_nomes_t = collections.deque(maxlen=8)    # quando cada nome foi lido
+        self.ult_nomes_txt = collections.deque(maxlen=8)  # o texto lido junto com cada nome
         self.nome_pagina = ""
         self.ficha_pagina = None
         self.sem_texto = 0
@@ -86,7 +112,8 @@ class Nucleo:
 
     def estado_motor(self):
         return {"escolhido": self.cfg.get("motor"), "clonada": self.narr.estado_clonada,
-                "usando": self.narr.motor_atual().nome,
+                "usando": ("local" if self.narr.motor_atual() is self.narr.rapida and self.cfg.get("motor") == "local"
+                           else self.narr.motor_atual().nome),
                 "visao": ("pronta" if self.visao and self.visao.pronta else
                           "erro" if self.visao and self.visao.erro else
                           "carregando" if self.visao and self.visao.carregando else
@@ -131,7 +158,7 @@ class Nucleo:
             "motor": self.estado_motor(),
             "config": {k: cfg.get(k) for k in ("volume", "velocidade", "motor", "visao", "escuta", "auto_regiao",
                                                 "jogo_fixo", "interromper_ao_avancar", "acelerar_se_atrasado",
-                                                "fonte", "fonte_hwnd", "fonte_monitor")},
+                                                "fonte", "fonte_hwnd", "fonte_monitor", "voz_unica")},
             "banco": self.banco.resumo(),
             "personagens": self.personagens(),
             "falando": self.ultimo_falando,
@@ -152,6 +179,13 @@ class Nucleo:
 
     def mudar_config(self, chave, valor):
         self.cfg[chave] = valor
+        if chave == "voz_unica":
+            self.cfg.pop("so_lucia", None)          # opcao antiga (so a Lucia)
+            if valor and self.cfg.get("motor") != "clonada":
+                # a voz clonada (Lucia, Jason) so existe na clonada (na rapida/local seria outra voz)
+                self.cfg["motor"] = "clonada"
+                chave, valor = "motor", "clonada"
+                log("🎙 Voz única ligada: mudando para a voz Clonada.")
         self.salvar_config()
         if chave == "motor" and valor == "clonada":
             self.narr.ligar_clonada()
@@ -160,6 +194,7 @@ class Nucleo:
                 from .escuta import Escuta
                 self.escuta = Escuta(self.cfg, self._pid_do_som, lambda: self.narr.falando)
                 self.narr.resolver_voz = self._resolver_voz
+                self.narr.candidatas_voz = self._candidatas_voz
             except Exception as e:
                 log("Escuta da voz original indisponível:", repr(e), tipo="aviso")
         if chave == "visao" and valor and not self.visao:
@@ -233,6 +268,7 @@ class Nucleo:
         self.descobridor.zerar()
         self.ult_nomes.clear()
         self.ult_nomes_t.clear()
+        self.ult_nomes_txt.clear()
         self.nome_pagina = ""
         self.avisar_estado()
 
@@ -267,6 +303,8 @@ class Nucleo:
             if perto and perto[0][0] >= 0.66 and (len(perto) == 1 or perto[0][0] - perto[1][0] >= 0.1):
                 return perto[0][1].title()
             return conhecidos[n]
+        if n not in conhecidos and n in lista_nomes and len(n) >= 4:
+            return b[:1].upper() + b[1:]   # nome proprio certo ("Lenny") nao vira outro parecido ("Leon")
         # erro de OCR no nome ("Dulch", "Ljutch" -> Dutch; "Anhur" -> Arthur): 1o os personagens
         # que ja apareceram, depois a lista de nomes proprios
         perto = difflib.get_close_matches(n, list(conhecidos), n=1, cutoff=0.72)
@@ -278,10 +316,16 @@ class Nucleo:
         def forma(x):
             # letras que o OCR confunde viram a mesma ("Aflhnr" ~ "Arthur": t/f/l/i -> l, u/n -> n)
             return x.translate(str.maketrans({"t": "l", "f": "l", "i": "l", "1": "l", "j": "l",
-                                              "u": "n", "h": "n", "r": "n", "c": "e", "o": "e"}))
+                                              "u": "n", "h": "n", "r": "n", "c": "e", "o": "e", "v": "y"}))
         parecidos = [k for k in conhecidos if inicial(k) == inicial(n) and abs(len(k) - len(n)) <= 1
                      and (difflib.SequenceMatcher(None, k[1:], n[1:]).ratio() >= 0.5
                           or difflib.SequenceMatcher(None, forma(k), forma(n)).ratio() >= 0.8)]
+        if len(parecidos) > 1:
+            # varios parecidos ("Ionnv": Lenny ou Leon?): fica o de forma mais parecida, se bem na frente
+            notas = sorted(((difflib.SequenceMatcher(None, forma(inicial(k) + k[1:]), forma(inicial(n) + n[1:])).ratio(), k)
+                            for k in parecidos), reverse=True)
+            if notas[0][0] >= 0.75 and notas[0][0] - notas[1][0] >= 0.15:
+                parecidos = [notas[0][1]]
         if len(parecidos) == 1:
             diag.ev("nome_corrigido", lido=b, virou=conhecidos[parecidos[0]])
             return conhecidos[parecidos[0]]
@@ -326,9 +370,53 @@ class Nucleo:
         return (self.cfg.get("fonte") in ("tela", "janela") and self.cfg.get("modo_legenda", True)
                 and not (self.perfil and self.perfil.dados.get("regiao_manual")))
 
+    @staticmethod
+    def _janelas_proprias(area):
+        """Janelas do proprio Voz Universal POR CIMA do navegador (fracoes da area): o painel aberto
+        na frente mexe (foto, textos) e esse movimento nao pode virar "video". As que estao ATRAS
+        do navegador nao contam (painel maximizado atras excluia a tela toda: "sem video")."""
+        out = []
+        try:
+            import win32gui
+            import win32process
+            x, y, w, h = area
+            meu = os.getpid()
+            frente = win32gui.GetForegroundWindow()
+            if frente and win32process.GetWindowThreadProcessId(frente)[1] == meu:
+                frente = None          # o painel e a janela da frente: vale ate achar o navegador
+
+            def cada(hw, _):
+                try:
+                    if hw == frente:
+                        return False   # daqui para baixo, tudo esta atras da janela da frente
+                    if not win32gui.IsWindowVisible(hw) or win32gui.IsIconic(hw):
+                        return True
+                    if win32process.GetWindowThreadProcessId(hw)[1] != meu:
+                        return True
+                    l, t, r, b = win32gui.GetWindowRect(hw)
+                    if r - l >= 200 and b - t >= 150:
+                        out.append([(l - x) / w, (t - y) / h, (r - x) / w, (b - y) / h])
+                except Exception:
+                    pass
+                return True
+            win32gui.EnumWindows(cada, None)
+        except Exception:
+            pass
+        return out
+
+    def _tela_cheia(self):
+        """Navegador em TELA CHEIA (a janela cobre o monitor todo): o video e a tela inteira, sem
+        depender do movimento (cena calma ou escura nao encolhe a area da legenda)."""
+        lim = self.video.limite
+        return bool(lim) and lim[0] <= 0.005 and lim[1] <= 0.005 and lim[2] >= 0.995 and lim[3] >= 0.995
+
     def _limite_video(self, area):
         """O video esta dentro da janela da frente (fora a do proprio programa). Se ela mudar
         (tela cheia, moveu, outra janela), o detector de video recomeca."""
+        exc = self._janelas_proprias(area)
+        if exc != self.video.excluir:
+            diag.ev("excluir_janelas", areas=[[round(v, 3) for v in e] for e in exc])
+        self.video.excluir = exc
         try:
             import win32gui
             import win32process
@@ -343,7 +431,7 @@ class Nucleo:
                 exe = psutil.Process(pid).name().lower()
             except Exception:
                 exe = ""
-            navegadores = {"chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "vivaldi.exe"}
+            navegadores = NAVEGADORES
             bloquear = exe in [p.lower() for p in self.cfg.get("ignorar_processos", [])] and exe not in navegadores
             bloquear = bloquear or exe.startswith("instalar voz universal")    # o proprio instalador
             if exe and not bloquear:
@@ -355,7 +443,7 @@ class Nucleo:
             if bloquear:
                 return
             x, y, w, hh = area
-            l, t, r, b = win32gui.GetWindowRect(h)
+            l, t, r, b = _ret_visivel(h)
             lim = [max(0.0, (l - x) / w), max(0.0, (t - y) / hh), min(1.0, (r - x) / w), min(1.0, (b - y) / hh)]
             if lim[2] - lim[0] < 0.1 or lim[3] - lim[1] < 0.1:
                 return
@@ -393,10 +481,23 @@ class Nucleo:
             self.ult_video = agora
             x, y, w, h = area
             self._limite_video(area)
+            # JOGO (ou qualquer programa que nao e navegador) na frente: o "video" e a janela
+            # inteira. Procurar o que se mexe so serve para achar o player dentro da pagina do
+            # navegador; no RDR2 ele achou o meio da cena (41%-77% da altura) e a legenda, que fica
+            # mais embaixo, ficou 20 s sem ser lida (14/11 09:35).
+            if self._jogo_na_frente() and self.video.limite:
+                if self.video.rect is not None:
+                    self.video.rect = None
+                    diag.ev("video", rect=None, motivo="jogo: janela inteira")
+                return self.video.limite
+            # navegador: acha o player pelo movimento. (Ficou depois de um "return" por engano e
+            # nao rodava: lia a janela inteira do navegador, com menus e paginas junto.)
             antes = self.video.rect
             r = self.video.olhar(capturar(sct, {"left": x, "top": y, "width": w, "height": h}))
             if r and (antes is None or max(abs(a - b) for a, b in zip(r, antes)) > 0.04):
                 diag.ev("video", rect=[round(v, 3) for v in r], confianca=self.video.confianca)
+        if (self._jogo_na_frente() or self._tela_cheia()) and self.video.limite:
+            return self.video.limite
         if self.video.rect:
             return self.video.rect
         # tela parada (jogo com a caixa de dialogo aberta, video pausado desde o comeco): depois de
@@ -405,16 +506,26 @@ class Nucleo:
             return self.video.limite
         return None
 
+    def _jogo_na_frente(self):
+        exe = (getattr(self, "exe_frente", "") or "").lower()
+        return bool(exe) and exe not in NAVEGADORES and not getattr(self, "frente_bloqueada", False)
+
     def _ler_legenda(self, sct, area):
         """-> (texto, nome) da legenda: dentro do video (achado pelo movimento), na parte de baixo."""
         x, y, w, h = area
         t_ini = time.time()
         v = self._onde_video(sct, area, t_ini)
         if getattr(self, "frente_bloqueada", False):
+            self._nao_li("programa comum na frente")
             return "", ""              # programa comum na frente (chat, terminal): espera voltar
+        if self._pagina_sem_video():
+            self._nao_li("pagina inicial/lista do YouTube (nao e um video aberto)")
+            return "", ""          # previas das miniaturas tocam sozinhas e os titulos eram lidos (15/11)
         if t_ini < getattr(self, "silencio_ate", 0):
+            self._nao_li("video acabou de trocar")
             return "", ""              # acabou de abrir outro video: o nome dele esta em cima da imagem
         if not v:
+            self._nao_li("sem video")
             # sem video na tela (nada se mexendo): nao le nada. Senao le o que estiver aberto
             # (terminal, pagina, menus) e fala coisa que nao e legenda.
             if self.status != "sem_video":
@@ -423,11 +534,20 @@ class Nucleo:
         vx0, vy0, vx1, vy1 = int(v[0] * w), int(v[1] * h), int(v[2] * w), int(v[3] * h)
         topo = vy0 + int((vy1 - vy0) * 0.45)
         base = min(h, vy1 + int((vy1 - vy0) * 0.15))
+        lim = self.video.limite
+        if lim:
+            # nunca passa da janela do navegador: com ele MAXIMIZADO (sem tela cheia) a margem de
+            # baixo caia na barra de tarefas do Windows, a area parecia "coberta por outra janela"
+            # e nada era lido (15/11: "a legenda so pega em tela cheia")
+            base = min(base, int(lim[3] * h))
         reg = {"left": x + vx0, "top": y + topo, "width": max(40, vx1 - vx0), "height": max(20, base - topo)}
         if not self.jan.a_vista(reg):
+            self._nao_li("janela do programa por cima da legenda")
             return None, None
         if not self._da_janela_da_frente(reg):
+            self._nao_li("outra janela por cima da legenda")
             return "", ""              # na troca (saindo da tela cheia) a area ja mostra outra janela
+        self._nao_li(None)
         img = capturar(sct, reg)
         # video pequeno (janela): a legenda fica miuda e o OCR erra ("Dulch"): amplia antes de ler
         esc = 1.0
@@ -440,6 +560,9 @@ class Nucleo:
             img = ImageOps.autocontrast(ImageOps.grayscale(img)).convert("RGB")
         motivos = []
         bloco = achar_legenda(img, dic=self.dic, motivos=motivos)
+        alt_txt = None
+        if bloco:
+            bloco, alt_txt = self._segunda_leitura(img, bloco)
         ms = (time.time() - t_ini) * 1000
         self.stats["ticks"] += 1
         self.stats["ocr_ms"] += ms
@@ -454,6 +577,34 @@ class Nucleo:
         self._quadro = (img, (x0, y0, x1, y1))
         nome, corpo = separar_nome(bloco)          # "Swanson: A Abigail disse..." -> Swanson
         texto = limpar(" ".join(l[0] for l in corpo))
+        if nome and " " in nome and self.perfil:
+            # nome partido pelo OCR ("Du tch" = Dutch, 15/11): junto, e alguem conhecido?
+            junto = "".join(nome.split())
+            for conhecido in self.perfil.personagens:
+                if normalizar(conhecido) == normalizar(junto):
+                    nome = conhecido
+                    break
+            else:
+                c = self._nome_canonico(junto)          # "I on nv" -> "Ionnv" -> Lenny
+                if c in self.perfil.personagens:
+                    nome = c
+        # ...a nao ser que seja quem acabou de falar ("Tavish:" de novo na legenda seguinte, 15/11)
+        ant = getattr(self, "_ult_fala", None)
+        recem = bool(nome and len(nome) > 2 and ant and ant[0] and time.time() - ant[2] <= 6
+                     and ant[0] in (nome, self._nome_canonico(nome)))
+        if nome and not recem and len(nome) > 3:
+            # funcao/papel ("Guarda: não fiquei sabendo...") ou comeco de alguem conhecido ("Guarda 3")
+            from .identidade import _NEUTRAS, _NOME, nomes_proprios
+            p0 = normalizar(nome.split()[0])
+            recem = (p0 in _NEUTRAS or nome.split()[0].lower() in _NOME
+                     or nome.split()[0].lower() in nomes_proprios()      # "Lenny: tão vendendo..." (15/11)
+                     or any(normalizar(k).startswith(normalizar(nome) + " ") for k in (self.perfil.personagens if self.perfil else {})))
+        if nome and texto[:1].islower() and not recem and (len(nome) <= 2 or not (self.perfil and nome in self.perfil.personagens)):
+            # "nome" NOVO seguido de texto em minuscula: palavra partida pelo OCR, nao quem fala
+            # ("Alé" + "de ex-colega de cela do Brian." era "Além de ex-colega..."; "Bo" + "o Brian era..."
+            # era "Bom, o Brian era...": nome de 2 letras vale mesmo se ja estiver na lista, 15/11)
+            diag.ev("nome_descartado", nome=nome, texto=texto[:40])
+            texto, nome = limpar(nome + " " + texto), ""
         if not nome:
             # nome e fala vieram como linhas separadas (alturas um pouco diferentes): procura o
             # "Nome:" de novo no texto ja montado ("Jimmy: Oh, concordo...")
@@ -505,29 +656,147 @@ class Nucleo:
                 self._dica_ate = time.time() + 3.0
                 return "", ""
             # 2a linha de uma dica que acabou de ser barrada ("Segure X" / "para remover a sela.")
-            if texto[:1].islower() and time.time() < getattr(self, "_dica_ate", 0):
+            # (ou um pedaco curto dela que o OCR leu sozinho: "una busca")
+            if (texto[:1].islower() or len(texto.split()) <= 3) and time.time() < getattr(self, "_dica_ate", 0):
                 return "", ""
-        if self.dic.ok and texto and esc > 1 and self.dic.desconhecidas(self.dic.consertar(texto)):
-            # video pequeno com palavra estranha: 2a leitura so com o texto claro isolado do fundo
-            # e fica, em cada trecho, com a leitura que faz mais sentido (medido: -9% de erros)
+        if self.dic.ok and texto and alt_txt:
+            # 2a leitura so com o texto claro isolado do fundo: fica, em cada trecho, com a leitura
+            # que faz mais sentido ("sando knscaras" -> "usando mascaras" no GTA V, 14/11).
+            # 3a leitura (branco com contorno escuro): entra como candidata inteira e tambem fundida;
+            # fica a versao com mais palavras de verdade, se for a MESMA frase (15/11: na cena do
+            # espelho, 17 de 22 leituras perfeitas contra 1; em 120 recortes variados, 18 melhores e 0 piores)
             try:
-                from .tela import suavizar
-                m = 10
-                rec = suavizar(img.crop((max(0, int(x0) - m), max(0, int(y0) - m),
-                                         min(img.width, int(x1) + m), min(img.height, int(y1) + m))))
-                alt_l = [l for l in ocr_linhas(rec) if len(l[0].strip()) >= 2]
-                if alt_l:
-                    _, c_alt = separar_nome(em_ordem(alt_l))
-                    alt = limpar(" ".join(l[0] for l in c_alt))
-                    if alt:
-                        texto = self.dic.fundir(texto, alt)
-            except Exception:
-                pass
+                s_txt, c_txt = alt_txt if isinstance(alt_txt, tuple) else (alt_txt, None)
+                def sem_nome(t):
+                    if not t:
+                        return ""
+                    _, c = separar_nome([(t, 0, 0, 1, 1)])
+                    return limpar(" ".join(l[0] for l in c))
+                s_txt, c_txt = sem_nome(s_txt), sem_nome(c_txt)
+                cands = [self.dic.fundir(texto, s_txt) if s_txt else texto]
+                if c_txt:
+                    cands += [self.dic.fundir(texto, c_txt), c_txt]
+                base = normalizar(texto)
+                cands = [x for x in cands if semelhanca(normalizar(x), base) >= 0.6] or cands[:1]
+                from .leitor import Leitor
+                texto = max(cands, key=Leitor._nota)
+            except Exception as e:
+                diag.ev("fusao_erro", erro=repr(e)[:120])
         if self.dic.ok and texto:
             texto = self.dic.consertar(texto)
         if not texto or (len(texto.split()) < 2 and (texto[-1:] not in FIM or len(re.findall(r"[^\W\d_]", texto)) < 3)):
             return "", nome
         return texto, nome
+
+    def _segunda_leitura(self, img, bloco):
+        """Le de novo so o recorte da legenda, com o texto claro em preto sobre branco (sem o fundo
+        do video) e margem larga dos lados (o OCR perdia a 1a letra: "osso" por "Nosso").
+        -> (bloco sem as linhas que nao sao texto claro, texto da 2a leitura).
+        Linha que so aparece na leitura colorida (bilhete rosa "ALARME" do cenario, colado embaixo
+        da legenda) sai. Guarda o resultado enquanto a leitura colorida nao muda (~10-15 ms)."""
+        chave = tuple(l[0] for l in bloco)
+        cache = getattr(self, "_cache_2a", None)
+        if cache and cache[0] == chave:
+            return cache[1], cache[2]
+        try:
+            x0, y0 = min(l[1] for l in bloco), min(l[2] for l in bloco)
+            x1, y1 = max(l[3] for l in bloco), max(l[4] for l in bloco)
+            alt_lin = max(8, max(l[4] - l[2] for l in bloco))
+            mx, my = int(2 * alt_lin), int(0.5 * alt_lin)
+            recorte = img.crop((max(0, int(x0) - mx), max(0, int(y0) - my),
+                                min(img.width, int(x1) + mx), min(img.height, int(y1) + my)))
+            rec = suavizar(recorte)
+            alt_l = em_ordem([l for l in ocr_linhas(rec) if len(l[0].strip()) >= 2])
+            alt_txt = limpar(" ".join(l[0] for l in alt_l))
+            # 3a leitura: so o branco COM contorno escuro (tira a luz do cenario atras da legenda)
+            cont_txt = limpar(" ".join(l[0] for l in em_ordem(
+                [l for l in ocr_linhas(isolar_contorno(recorte)) if len(l[0].strip()) >= 2])))
+            novo = list(bloco)
+            if alt_l and len(bloco) >= 2:
+                def tem_par(l):
+                    a = normalizar(l[0])
+                    return any(semelhanca(a, normalizar(k[0])) >= 0.5 or (a and a in normalizar(k[0]))
+                               for k in alt_l)
+                pares = [tem_par(l) for l in bloco]
+                # so tira linha curta (1-2 palavras) e so se a 2a leitura achou a legenda de verdade
+                # (legenda amarela some na 2a leitura: ai nao tira nada)
+                if any(pares):
+                    novo = [l for l, ok in zip(bloco, pares) if ok or len(l[0].split()) > 2]
+                    if len(novo) < len(bloco):
+                        diag.ev("linha_nao_legenda", tiradas=[l[0][:30] for l in bloco if l not in novo])
+            res = (novo or list(bloco), (alt_txt or None, cont_txt or None))
+        except Exception as e:
+            diag.ev("segunda_leitura_erro", erro=repr(e)[:120])
+            res = (bloco, None)
+        self._cache_2a = (chave, res[0], res[1])
+        return res
+
+    @staticmethod
+    def _mesmo_texto(fala, lido):
+        """A fala saiu desta leitura? (lido=None: sem registro, aceita)"""
+        if lido is None:
+            return True
+        a, b = normalizar(fala), normalizar(lido)
+        if not a or not b:
+            return False
+        return a[:14] in b or b[:14] in a or difflib.SequenceMatcher(None, a[:40], b[:40]).ratio() >= 0.6
+
+    def _video_com_nomes(self):
+        """Quase toda fala deste video vem com "Nome:" (filme do RDR2)."""
+        recentes = list(getattr(self, "_com_nome", None) or [])
+        if len(recentes) >= 3:
+            return sum(recentes) >= 0.6 * len(recentes)
+        pers = (self.perfil.personagens if getattr(self, "perfil", None) else {}) or {}
+        return sum(1 for f in pers.values() if f.get("falas", 0) >= 3 and not f.get("anonimo")) >= 5
+
+    def _lixo_sem_nome(self, fala):
+        """Legenda sem nome, num video com nomes, com metade das palavras inexistentes: objetivo lido
+        num fundo claro ("rogu Idnr de recompensas.", 15/11). Nao e fala de ninguem."""
+        if not self._video_com_nomes():
+            return False
+        from .leitor import Leitor
+        pal = [w for w in re.findall(r"[^\W\d_]+", fala) if len(w) >= 3]
+        if len(pal) < 2:
+            return False
+        ruins = sum(1 for w in pal if not Leitor._conhecida(w) and not w[:1].isupper())
+        ruins += sum(1 for w in pal if w[:1].isupper() and not Leitor._conhecida(w) and w != pal[0] and len(w) <= 4)
+        return ruins >= 0.5 * len(pal)
+
+    def _eh_objetivo(self, fala):
+        """Video em que quase toda fala vem com "Nome:" (filme do RDR2): uma legenda SEM nome que
+        comeca com verbo de objetivo ("Ajude o Charles e o Bill", "Fuja pelo buraco...", "Entre em
+        cobertura perto do Tio") e o objetivo da missao, nao fala (15/11)."""
+        from .tela import _VERBOS_OBJETIVO
+        recentes = list(getattr(self, "_com_nome", None) or [])   # (objetivos nao entram nela)
+        if not recentes or len(recentes) < 3:
+            # logo ao abrir o programa ainda nao ha historico: vale o perfil do video (muitos
+            # personagens com nome que ja falaram bastante = legenda com "Nome:")
+            pers = (self.perfil.personagens if getattr(self, "perfil", None) else {}) or {}
+            com_nome = sum(1 for f in pers.values() if f.get("falas", 0) >= 3 and not f.get("anonimo"))
+            if com_nome < 5 or (recentes and sum(recentes) < len(recentes)):
+                return False
+        elif sum(recentes) < 0.6 * len(recentes):
+            return False
+        p = re.sub(r"[^\wÀ-ÿ-]", "", (fala.split() or [""])[0]).lower()
+        # "Aproxime- do ladrão" (o OCR comeu o "se"): vale o verbo antes do hifen
+        return ((p in _VERBOS_OBJETIVO or p.split("-")[0] in _VERBOS_OBJETIVO)
+                and not fala.rstrip().endswith(("?", "!")))
+
+    def _pagina_sem_video(self):
+        """Navegador na frente mostrando a pagina inicial/lista do YouTube: o titulo da janela e so
+        "YouTube" (num video aberto e "<titulo do video> - YouTube")."""
+        if (getattr(self, "exe_frente", "") or "").lower() not in NAVEGADORES:
+            return False
+        t = re.sub(r"^\(\d+\)\s*", "", getattr(self, "titulo_frente", "") or "").strip()
+        t = re.sub(r"\s+-\s+(Google Chrome|Microsoft.? Edge|Mozilla Firefox|Opera|Brave)$", "", t)
+        return t in ("YouTube", "Inscrições - YouTube", "Assinaturas - YouTube", "Histórico - YouTube")
+
+    def _nao_li(self, motivo):
+        """Registra POR QUE nao leu a legenda (so quando o motivo muda): sem isso, "0 leituras"
+        nao dizia nada (15/11: ficou minutos sem ler e o registro so dizia "lendo")."""
+        if motivo != getattr(self, "_ult_nao_li", None):
+            self._ult_nao_li = motivo
+            diag.ev("nao_li" if motivo else "voltou_a_ler", motivo=motivo)
 
     def _da_janela_da_frente(self, reg):
         """O que aparece no meio e nos cantos de baixo da area e mesmo da janela da frente?"""
@@ -564,9 +833,13 @@ class Nucleo:
                 if b2 in conhecidos:
                     return b2
             c = self._nome_canonico(b)
-            return c if c in conhecidos else ""
+            # ...ou o nome que acabou de ser lido (personagem novo ainda sem ficha: "Freguês 6")
+            return c if (c in conhecidos or c in self.ult_nomes) else ""
 
-        m = re.match(r"^\W{0,3}(\S{1,3}:\s?\S{2,12}|[^\s:;]{3,20}(?:\s[A-ZÀ-Ý][^\s:;]{1,15})?)\s*[:;]\s+(\S.*)$", fala)
+        # sujeira antes do nome: "B: Freguês 6: São os Saqueadores..." (15/11)
+        fala = re.sub(r"^\W{0,3}\S{1,3}:\s+(?=[A-ZÀ-Ý][^:]{2,25}:\s)", "", fala)
+
+        m = re.match(r"^\W{0,3}(\S{1,3}:\s?\S{2,12}|[^\s:;]{3,20}(?:\s(?:[A-ZÀ-Ý][^\s:;]{1,15}|\d{1,2}))?)\s*[:;]\s+(\S.*)$", fala)
         if m:
             nome = canonico(m.group(1).replace(": ", "").replace(":", ""))
             if nome:
@@ -598,6 +871,47 @@ class Nucleo:
             pass
         return self.pid_frente
 
+    def _previa(self, texto, nome):
+        """1a leitura de uma legenda nova: ja pede a voz online das frases completas, nas vozes que
+        ela pode ter (o leitor ainda vai esperar ~0,2 s para confirmar o texto). Quando a fala sair
+        igual, o som ja esta chegando (~0,2 s a menos de atraso)."""
+        if not texto or not self.elenco:
+            return
+        try:
+            from .leitor import dividir_frases, hesitacao
+            completas = [f for f in dividir_frases(texto)
+                         if f.rstrip("\"')")[-1:] in ".!?…" and len(normalizar(f)) >= 3]
+            if not completas:
+                return
+            quem = self._nome_canonico(nome) if nome else ""
+            f = self.elenco.ficha(quem) if quem else None
+            voz, tom, vel, cat = ((f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), f.get("categoria") or "")
+                                  if f and f.get("voz") else ("narrador", 1.0, 1.0, "narrador" if not quem else ""))
+            for fr in completas[:3]:
+                self.narr.previa(fr, voz, tom, vel, quem if f else "", cat)
+        except Exception as e:
+            diag.ev("previa_erro", erro=repr(e)[:160])
+
+    def _candidatas_voz(self, texto, voz, tom, vel, quem, cat):
+        """Vozes que esta fala PODE ter, antes da escuta decidir: a voz da ficha e, se for fala sem
+        nome, tambem a do "Homem (pela voz)" e a da "Mulher (pela voz)". O narrador ja as pede
+        a voz da Microsoft enquanto a escuta ouve (a espera da escuta deixa de somar no atraso)."""
+        if not self.elenco or not self.perfil or not (cat == "narrador" or not quem):
+            return [(voz, tom, vel)]
+        # fala sem nome: a voz da ULTIMA decisao primeiro, depois a do outro sexo. A do narrador so
+        # entra se a ultima foi narrador (menos pedidos: com 3 vozes x 3 tentativas a Microsoft
+        # parou de responder por 20 s, 14/11)
+        pers = self.perfil.personagens
+        ult = getattr(self, "_ult_anonimo", "Homem (pela voz)")
+        out = []
+        if ult == "narrador":
+            out.append((voz, tom, vel))
+        for nome in sorted(("Homem (pela voz)", "Mulher (pela voz)"), key=lambda n: n != ult):
+            f = pers.get(nome)
+            if f and f.get("voz"):
+                out.append((f["voz"], f.get("tom", 1.0), f.get("vel", 1.0)))
+        return out[:2] or [(voz, tom, vel)]
+
     def _resolver_voz(self, pag, texto, voz, tom, vel, quem, cat, visto):
         """Chamado pelo narrador logo antes de gerar cada fala: ouve a voz original do jogo.
         - fala SEM nome (legenda): se a voz for claramente de homem/mulher/crianca, usa a ficha
@@ -609,6 +923,12 @@ class Nucleo:
             return None
         if pag in self._voz_pag:
             return self._voz_pag[pag]
+        if pag in getattr(self, "_oposto", {}) and (cat == "narrador" or not quem):
+            r = self._voz_oposta(pag)
+            if r:
+                self._voz_pag[pag] = r
+                diag.ev("escuta_fala", texto=texto[:60], quem="", decisao=r[3] + " (2a pessoa do dialogo)")
+                return r
         if len(self._voz_pag) > 50:
             for k in sorted(self._voz_pag)[:25]:
                 self._voz_pag.pop(k, None)
@@ -616,13 +936,52 @@ class Nucleo:
         r = None
         if cat == "narrador" or not quem:
             res = esc.ouvir(visto, esperar=max(0.0, visto + espera - time.time()))
+            extra = float(self.cfg.get("escuta_extra_s", 0.6))
+            if not res["sexo"] and res.get("rms", 0) > 0.005 and res.get("voz_s", 0) < 0.3 and extra > 0:
+                # ouviu pouca voz ainda (a fala original comecou depois da legenda): escuta mais um
+                # pouco antes de cair na voz do narrador (15/11: 79 falas sem decisao no trailer)
+                res2 = esc.ouvir(visto, esperar=max(0.0, visto + espera + extra - time.time()))
+                if res2["sexo"]:
+                    res2["extra"] = True
+                    res = res2
             decisao = None
             if res["sexo"] and (res.get("cedo") or res["certeza"] >= float(self.cfg.get("escuta_certeza", 0.35))):
                 from .identidade import categoria_de
                 categoria = categoria_de(res["sexo"], "crianca" if res["crianca"] >= 0.6 else "adulto")
                 nome, f = self.elenco.anonimo(categoria)
+                self._ult_anonimo = nome
                 r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), nome, f["categoria"])
                 decisao = nome
+            if not decisao:
+                # a escuta nao decidiu: o TEXTO pode dizer quem fala ("Eu tava ocupada." -> mulher;
+                # 15/11 saiu na voz do Jason)
+                from .identidade import categoria_de, pistas_texto
+                sexos = {p[1] for p in pistas_texto(texto) if p[0] == "s"}
+                if len(sexos) == 1:
+                    nome, f = self.elenco.anonimo(categoria_de(sexos.pop(), "adulto"))
+                    self._ult_anonimo = nome
+                    r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), nome, f["categoria"])
+                    decisao = nome + " (pelo texto)"
+            if (not decisao and res.get("sexo") and res.get("certeza", 0) >= float(self.cfg.get("escuta_palpite", 0.2))
+                    and abs(res.get("p_m", 0.5) - 0.5) >= 0.2):
+                # a escuta nao teve certeza, mas PENDE claramente para um lado: melhor que a voz
+                # padrao (15/11: "Lantejoulas?", "Gustavo, essa é a Lucia." pendiam p/ mulher e
+                # saiam na voz do Jason; os palpites de 0,2+ conferidos batiam com quem falava)
+                nome, f = self.elenco.anonimo(categoria_de(res["sexo"], "crianca" if res.get("crianca", 0) >= 0.6 else "adulto"))
+                self._ult_anonimo = nome
+                r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), nome, f["categoria"])
+                decisao = nome + " (palpite da voz)"
+            if not decisao and self.cfg.get("voz_unica") == "dupla":
+                # chamou o OUTRO pelo nome: "Jay, segura aí!" -> quem fala e a Lucia; "..., Lu!" -> Jason
+                # (15/11: cena de tiroteio, a escuta nao ouvia a voz no meio do barulho)
+                sx = self._sexo_de_quem_e_chamado(texto)
+                if sx:
+                    nome, f = self.elenco.anonimo(categoria_de("f" if sx == "m" else "m", "adulto"))
+                    self._ult_anonimo = nome
+                    r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), nome, f["categoria"])
+                    decisao = nome + " (chamou o outro pelo nome)"
+            if not decisao:
+                self._ult_anonimo = "narrador"
             diag.ev("escuta_fala", texto=texto[:60], quem="", decisao=decisao, **res)
         else:
             f = self.elenco.ficha(quem)
@@ -643,6 +1002,50 @@ class Nucleo:
         if r:
             self.emitir("personagens", self.personagens())
         return r
+
+    _RE_DIALOGO = re.compile(r"^\s*[-–—]\s*(\S.*?[.!?…]\"?)\s+[-–—]\s*(\S.+)$")
+
+    def _separar_dialogo(self, falas):
+        """Legenda com DUAS pessoas ("- Isso. - E você é o motorista?"): vira duas falas, a 2a com a
+        voz oposta a da 1a (antes saia tudo numa voz so, 15/11)."""
+        for fala, nova, visto in falas:
+            m = self._RE_DIALOGO.match(fala)
+            if not m or self.nome_pagina and not nova:
+                yield fala, nova, visto
+                continue
+            diag.ev("dialogo_separado", a=m.group(1)[:40], b=m.group(2)[:40])
+            self._parte1, self._parte1_pag = True, None
+            yield m.group(1), True, visto
+            self._parte1 = False
+            self._parte2_de = self._parte1_pag
+            yield m.group(2), True, visto + 0.3
+            self._parte2_de = None
+
+    def _voz_oposta(self, pag):
+        """Voz da 2a pessoa de uma legenda "- A. - B.": o sexo oposto ao da 1a, se a 1a foi decidida."""
+        r1 = self._voz_pag.get(getattr(self, "_oposto", {}).get(pag))
+        if not r1:
+            return None
+        oposto = {"homem": "mulher", "mulher": "homem", "menino": "menina", "menina": "menino",
+                  "idoso": "idosa", "idosa": "idoso"}.get(r1[4])
+        if not oposto:
+            return None
+        nome, f = self.elenco.anonimo(oposto)
+        return (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), nome, f["categoria"])
+
+    @staticmethod
+    def _sexo_de_quem_e_chamado(texto):
+        """Modo "Lucia + Jason": a fala chama a Lucia ou o Jason pelo nome/apelido ("Jay, ...",
+        "..., Lu!", "Você é profissional, Lucia, hein?") -> sexo de quem e CHAMADO, senao None."""
+        from .identidade import nomes_proprios
+        nomes = nomes_proprios()
+        achados = set()
+        for m in re.finditer(r"(?:^|[,.!?…]\s*)([A-ZÀ-Ý][a-zà-ÿ]{1,9})\s*(?=[,!?.…]|$)", texto.strip()):
+            alvo = m.group(1).lower()
+            for vid, sx in (("lucia", "f"), ("jason", "m")):
+                if alvo[:2] == vid[:2] and nomes.get(alvo, sx) == sx and (vid.startswith(alvo) or alvo in nomes):
+                    achados.add(sx)
+        return achados.pop() if len(achados) == 1 else None
 
     def _nomes_no_texto(self, fala):
         """Nome de personagem conhecido que perdeu a 1a letra no OCR: "Siga o utch." -> "Siga o Dutch."
@@ -672,6 +1075,9 @@ class Nucleo:
             return "", texto
         bruto, resto = ps[0], ps[1]
         if not resto[:1].isupper():
+            return "", texto
+        # "Aê! Cracudos!": exclamacao/pergunta no fim da 1a palavra e fala, nao nome sem ':'
+        if bruto.rstrip("\"')")[-1:] in ("!", "?", "…") or len(re.sub(r"[^\wÀ-ÿ]", "", bruto)) < 3:
             return "", texto
         # "Arthur. Pois é.": nome CERTO com "." no lugar de ":" -> so se a mesma legenda acabou de
         # ser lida com esse nome (senao e alguem chamando o Arthur: "Arthur. Vem cá.")
@@ -744,6 +1150,14 @@ class Nucleo:
             pass
         self._quadro = None
 
+    @staticmethod
+    def _placa_30s():
+        try:
+            from .util import medidor_placa
+            return medidor_placa().resumo(30)
+        except Exception:
+            return {}
+
     def _sistema(self):
         """A cada 30 s: memoria, placa de video, processador e o custo de cada leitura."""
         try:
@@ -756,16 +1170,33 @@ class Nucleo:
                     cpu_total=psutil.cpu_percent(None), programa_mb=round(p.memory_info().rss / 2 ** 20), privada_mb=round(getattr(p.memory_info(), "private", 0) / 2 ** 20),
                     leituras=st["ticks"], ocr_medio_ms=round(st["ocr_ms"] / max(1, st["ticks"])),
                     leituras_por_s=round(st["ticks"] / max(1, time.time() - st["desde"]), 1),
-                    pedacos=self.cfg.get("xtts_pedacos"), status=self.status)
+                    pedacos=self.cfg.get("xtts_pedacos"), status=self.status, **self._placa_30s())
             self.stats = {"ticks": 0, "ocr_ms": 0.0, "desde": time.time()}
         except Exception:
             pass
+        # RAM quase no fim (jogo pesado): solta a visao, que e o opcional mais pesado (~0,7 GB). Ela
+        # volta sozinha quando sobrar memoria (preparar() so carrega com 3 GB livres).
+        try:
+            limite = float(self.cfg.get("ram_minima_gb", 1.0))
+            if self.visao and self.visao.pronta and ram is not None and ram < limite and self.visao.descarregar():
+                log(f"🧹 Pouca RAM livre ({ram:.1f} GB): desliguei a visão por enquanto para a voz não engasgar.",
+                    tipo="aviso")
+                diag.ev("visao_descarregada", ram_livre_gb=round(ram, 2))
+                self.narr.aviso("motor", {})
+        except Exception:
+            pass
+        # voz clonada escolhida mas nao carregou por falta de memoria: tenta de novo (o jogo
+        # costuma liberar memoria depois de carregar). Antes so tentava ao mexer no painel.
+        if self.cfg.get("motor") == "clonada" and self.narr.estado_clonada == "sem_memoria":
+            self.narr.ligar_clonada(avisar=False)
 
     def rodar(self):
         sct = (getattr(mss, "MSS", None) or mss.mss)()
         ult_sistema = time.time()
         ult_procura = 0.0
         ult_estado = 0.0
+        ult_motor = 0.0
+        self._ult_estado_motor = None
         while True:
             t0 = time.time()
             with self.trava:
@@ -785,6 +1216,17 @@ class Nucleo:
             except Exception as e:
                 log("Erro no laço:", repr(e), tipo="erro")
                 time.sleep(0.5)
+            if t0 - ult_motor > 1:
+                # visao/escuta/voz clonada terminam de carregar em segundo plano: atualiza o painel
+                # assim que o estado muda (no modo rapido ninguem avisava e ficava "carregando...")
+                ult_motor = t0
+                try:
+                    est = self.estado_motor()
+                    if est != self._ult_estado_motor:
+                        self._ult_estado_motor = est
+                        self.emitir("motor")
+                except Exception:
+                    pass
             if t0 - ult_estado > 5:
                 ult_estado = t0
                 self.emitir("personagens", self.personagens())
@@ -861,16 +1303,19 @@ class Nucleo:
         if self._modo_legenda() and getattr(self, "frente_bloqueada", False):
             self._mudar_status("outra_janela")
         else:
-            self._mudar_status("sem_video" if (self._modo_legenda() and not self.video.rect) else "lendo")
+            self._mudar_status("sem_video" if (self._modo_legenda() and not self.video.rect
+                                                   and not self._jogo_na_frente()) else "lendo")
         if texto:
             self.sem_texto = 0
             self.ult_nomes.append(self._nome_canonico(nome))
             self.ult_nomes_t.append(agora)
+            self.ult_nomes_txt.append(texto)
         else:
             self.sem_texto += 1
             if self.sem_texto >= 3:
                 self.ult_nomes.clear()
                 self.ult_nomes_t.clear()
+                self.ult_nomes_txt.clear()
         if texto == self.lido and nome != getattr(self, "_nome_lido", ""):
             # mesmo texto, nome diferente (OCR piscando no nome): registra para achar de onde veio
             diag.ev("nome_lido", nome=nome, texto=texto[:40])
@@ -878,6 +1323,7 @@ class Nucleo:
         if texto != self.lido:
             diag.ev("leitura", texto=texto, nome=nome)
             self.lido = texto
+            self._previa(texto, nome)
             # nomes que aparecem ESCRITOS no meio da fala ("O Signor Bronte vai ficar..."): quando
             # alguem com esse nome falar, ele nao vira outro parecido da lista ("Bonnie")
             for w in re.findall(r"(?<=\w )[A-ZÀ-Ý][a-zà-ÿ]{3,}", texto):
@@ -885,20 +1331,36 @@ class Nucleo:
             if texto and getattr(self, "_quadro", None):
                 self._salvar_quadro(texto)
             self.emitir("lido", {"texto": texto, "nome": nome})
-        for fala, nova, visto in self.leitor.tick(texto, agora):
+        for fala, nova, visto in self._separar_dialogo(self.leitor.tick(texto, agora)):
             if len(re.sub(r"[\W\d_]", "", fala)) < 2:      # "i", "-", "4": sujeira do OCR
                 diag.ev("descartei", motivo="curta demais", texto=fala)
+                continue
+            if eh_relogio(fala):                             # tempo do player do video
+                diag.ev("descartei", motivo="relogio", texto=fala)
                 continue
             nome_f, fala = self._nome_na_fala(fala)
             fala = self._nomes_no_texto(fala)
             if nome_f:
                 nova = nova or nome_f != self.nome_pagina
+            if not nova and self.nome_pagina and self._modo_legenda():
+                # mesma "pagina" para o leitor, mas a legenda trocou de pessoa: "Catherine: Olá." (o
+                # nome antigo piscou) -> "Arthur: Olá, senhora." falava "senhora." como Catherine (15/11)
+                txts = getattr(self, "ult_nomes_txt", None) or [None] * len(self.ult_nomes)
+                atual = nome_estavel([n for n, tt, tx in zip(self.ult_nomes, self.ult_nomes_t, txts)
+                                      if tt >= visto - 0.15 and tx and self._mesmo_texto(fala, tx)])
+                if atual and atual != self.nome_pagina:
+                    diag.ev("nome_mudou_na_pagina", de=self.nome_pagina, para=atual, texto=fala[:40])
+                    nova = True
             if nova or not self.nome_pagina:
                 if self._modo_legenda():
                     # legenda: so valem os nomes lidos JUNTO com esta fala (desde que ela apareceu);
                     # senao um objetivo sem nome herdava o nome da legenda anterior
+                    # ...e lidos com ESTE texto: objetivo e dialogo alternando na tela davam ao
+                    # objetivo o nome do dialogo ("Entregue o moonshine..." como Arthur, 15/11)
                     desde = visto - 0.15
-                    self.nome_pagina = nome_estavel([n for n, tt in zip(self.ult_nomes, self.ult_nomes_t) if tt >= desde])
+                    txts = getattr(self, "ult_nomes_txt", None) or [None] * len(self.ult_nomes)
+                    self.nome_pagina = nome_estavel([n for n, tt, tx in zip(self.ult_nomes, self.ult_nomes_t, txts)
+                                                     if tt >= desde and self._mesmo_texto(fala, tx)])
                 else:
                     self.nome_pagina = nome_estavel(self.ult_nomes)
                 self.ficha_pagina = None
@@ -906,7 +1368,8 @@ class Nucleo:
                 # "a gente tava so esperando."): e o mesmo personagem falando
                 ant = getattr(self, "_ult_fala", None)
                 inicio = fala.lstrip("\"'“”«»-–— ")
-                continua = (ant and ant[0] and agora - ant[2] < 4.0
+                # (objetivo logo depois de "Extraoficialmente..." nao e continuacao, 15/11)
+                continua = (ant and ant[0] and agora - ant[2] < 4.0 and not self._eh_objetivo(fala)
                             and (inicio[:1].islower() or ant[1].rstrip()[-1:] in ",;" or ant[1].rstrip().endswith("...")))
                 # nome lido agora e NOVO (ninguem com esse nome falou antes) e a frase continua a
                 # anterior: quase sempre e o nome estragado pelo OCR ("Willie" no lugar de Hosea)
@@ -919,13 +1382,33 @@ class Nucleo:
                     diag.ev("continua", quem=ant[0], texto=fala[:50])
             if nome_f:
                 self.nome_pagina = nome_f          # o nome que estava grudado na propria fala vale mais
+            if self.nome_pagina and len(fala.split()) >= 3:
+                # nome de quem fala colado no comeco, estragado pelo OCR ("Trelawnv ligados a Cole...",
+                # quem fala e o Trelawny, 15/11): tira a 1a palavra se parece o nome e o resto segue
+                p1, resto = fala.split(None, 1)
+                limpo = re.sub(r"[^\wÀ-ÿ]", "", p1)
+                proprio = (normalizar(limpo) == normalizar(self.nome_pagina.split()[0])
+                           and p1.rstrip()[-1:] in ".:;")     # "Lenny. Talvez te chamem..." dito pelo Lenny
+                if proprio or (resto[:1].islower() and len(limpo) >= 4 and limpo[:1].isupper()
+                        and difflib.SequenceMatcher(None, normalizar(limpo), normalizar(self.nome_pagina)).ratio() >= 0.7):
+                    diag.ev("nome_tirado_da_fala", lido=p1, quem=self.nome_pagina)
+                    fala = resto
             self._ult_fala = (self.nome_pagina, fala, agora)
+            self._com_nome = getattr(self, "_com_nome", collections.deque(maxlen=12))
+            from .tela import _VERBOS_OBJETIVO
+            p0 = re.sub(r"[^\wÀ-ÿ-]", "", (fala.split() or [""])[0]).lower()
+            # frase sem nome com cara de objetivo NAO entra na conta: cada objetivo que escapava
+            # baixava a proporcao e fazia os seguintes escaparem tambem (15/11)
+            if self.nome_pagina or (p0 not in _VERBOS_OBJETIVO and p0.split("-")[0] not in _VERBOS_OBJETIVO):
+                self._com_nome.append(bool(self.nome_pagina))
             if self.nome_pagina:
                 prob = None
                 f0 = self.elenco.ficha(self.nome_pagina)
                 if (self.visao and self.cfg.get("visao", True) and nova
                         and (not f0 or (f0.get("olhadas", 0) < 3 and not f0.get("fixo")))):
-                    if self.visao.pronta:
+                    # com a voz clonada presa na placa de video, a visao (tambem na placa) travaria
+                    # a leitura da tela inteira: espera a placa voltar
+                    if self.visao.pronta and not self.narr._clonada_presa():
                         reg_v = self.legenda_frac if self._modo_legenda() else self.perfil.regiao
                         prob = self.visao.classificar(self._olhar(sct, self.area, reg_v))
                     # (se ainda nao esta pronta, _talvez_carregar_visao carrega num momento calmo)
@@ -934,8 +1417,20 @@ class Nucleo:
                                 categoria=f["categoria"], nova=nova, visto=visto)
                 if not f0 or nova:
                     self.emitir("personagens", self.personagens())
+            elif self._eh_objetivo(fala):
+                diag.ev("descartei", motivo="objetivo do jogo", texto=fala[:60])
+            elif self._lixo_sem_nome(fala):
+                diag.ev("descartei", motivo="sem nome e embaralhada", texto=fala[:60])
             else:
                 self.narr.falar(fala, "narrador", quem="", categoria="narrador", nova=nova, visto=visto)
+                if getattr(self, "_parte2_de", None) is not None:
+                    # 2a pessoa da legenda "- A. - B.": a voz sai oposta a da 1a (ver _resolver_voz)
+                    self._oposto = getattr(self, "_oposto", {})
+                    self._oposto[self.narr.pag] = self._parte2_de
+                    self._parte2_de = None
+                elif getattr(self, "_parte1", False):
+                    self._parte1_pag = self.narr.pag
+                    self._parte1 = False
 
     # ------------------------------------------------------------- teclas
     def alternar_pausa(self):

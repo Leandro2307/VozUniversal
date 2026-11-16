@@ -19,7 +19,9 @@ except Exception:
 
 from PIL import Image                                                           # noqa: E402
 from nucleo.tela import (Dicionario, em_ordem, juntar_mesma_linha, limpar, ocr_linhas,  # noqa: E402
-                         separar_nome, suavizar)
+                         separar_nome, suavizar, isolar_contorno, semelhanca)
+from nucleo.leitor import Leitor                                                # noqa: E402
+from nucleo.util import normalizar                                              # noqa: E402
 
 dic = Dicionario()
 
@@ -41,7 +43,7 @@ def main():
     pasta = sys.argv[1] if len(sys.argv) > 1 else max(glob.glob(os.path.join(os.path.dirname(AQUI), "diagnostico", "quadros", "*")),
                                                      key=os.path.getmtime)
     arqs = sorted(glob.glob(os.path.join(pasta, "*.jpg")))[:150]
-    tot = {"normal": 0, "segunda leitura": 0, "melhor das duas": 0}
+    tot = {"normal": 0, "segunda leitura": 0, "melhor das duas": 0, "com contorno (atual)": 0}
     palavras = 0
     exemplos = []
     for a in arqs:
@@ -54,6 +56,11 @@ def main():
         tot["normal"] += e1
         tot["segunda leitura"] += e2
         tot["melhor das duas"] += e3
+        # jeito atual do programa (15/11): 3a leitura so do branco com contorno escuro, candidata
+        t4 = ler(isolar_contorno(img))
+        cands = [fundido] + ([dic.fundir(t1, t4) if t1 else t4, t4] if t4 else [])
+        cands = [x for x in cands if x and semelhanca(normalizar(x), normalizar(t1)) >= 0.6] or [fundido]
+        tot["com contorno (atual)"] += estranhas(max(cands, key=Leitor._nota))
         palavras += len(t1.split())
         if e3 < e1 and len(exemplos) < 6:
             exemplos.append((t1, fundido))

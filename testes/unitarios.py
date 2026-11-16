@@ -173,6 +173,36 @@ while t < 78:
     t += 0.11
 confere("frase nao termina em 'nesse'", "nesse." not in " ".join(falado) and "nesse monstro." in " ".join(falado), True)
 
+# legenda seguinte que so muda o COMECO e outra fala (nao a mesma legenda continuando)
+for seg, esperado in [("Tipo, eu nem quero ouvir essa merda.", 2), ("Wano... eu nem quero ouvir essa merda.", 1)]:
+    lt, falado, t = Leitor(dict(PADRAO)), [], 0.0
+    while t < 6:
+        falado += [f for f, _, _ in lt.tick("Mano... eu nem quero ouvir essa merda." if t < 2.5 else seg, t)]
+        t += 0.11
+    confere(f"so o comeco muda: {seg[:12]!r}", len(falado), esperado)
+
+# OCR piscando no fundo claro (cada leitura perde um pedaco diferente): junta as leituras e fala a
+# frase COMPLETA, uma vez so (15/11, GTA 6: saia "Sabe, o você tá ... já tá bem vamos saindo?")
+from nucleo.tela import Dicionario as _D   # noqa: E402
+_D()
+seq = [(69.546, "Sabe, o que você ta vestindo agora já tá bem vamos saindo?"),
+       (69.686, "Sabe, oq e você tá vestindo agora lá tá bem bo ito, então... vamos saindo?"),
+       (69.764, "Sabe, oq e você tá vestindo agora já tá bem bo ito, então... vamos saindo?"),
+       (69.88, "Sabe, oq e você tá vestindo agora já tá bem bo vamos saindo?"),
+       (70.025, "Sabe, o que você tá vestindo agora já tá bemb vamos saindo?"),
+       (70.107, "Sabe, o você tá vestindo agora já tá bem vamos saindo?"),
+       (70.2, "Sabe, o você tá vestindo agora já tá bem vamos saindo?"),
+       (72.0, "")]
+lt, falado, i, t = Leitor(dict(PADRAO)), [], -1, 69.5
+while t < 73:
+    while i + 1 < len(seq) and seq[i + 1][0] <= t:
+        i += 1
+    if i >= 0:
+        falado += [f for f, _, _ in lt.tick(seq[i][1], t)]
+    t += 0.11
+confere("junta leituras do OCR piscando", falado,
+        ["Sabe, o que você tá vestindo agora já tá bem bonito, então... vamos saindo?"])
+
 # nome escrito no meio de uma fala ("O Signor Bronte vai ficar...") nao vira outro da lista ("Bonnie")
 _n.palavras_vistas = {"bronte": 0.0, "luca": 0.0}
 confere("Bronte visto no texto", _n._nome_canonico("Bronte"), "Bronte")
@@ -195,6 +225,14 @@ for t, esperado in [("Mover para frente trás Co Girar (segurar) n Cancelar", Tr
                     ("Acoplar um material 020", True), ("Vamos!", False)]:
     confere(f"barra de comandos {t!r}", eh_barra_de_comandos(t), esperado)
 confere("item em maiusculas", caixa_alta("OFERENDA LUMINOSA", dic), True)
+
+# palavra sozinha: fala de verdade ("Vamos.") x botao/rotulo ("Use") x pedaco do OCR ("ão.")
+from nucleo.tela import palavra_que_e_fala   # noqa: E402
+for t, esperado in [("Vamos.", True), ("Vamos!", True), ("Não.", True), ("Valeu.", True), ("Oi.", True),
+                    ("Amigão...", True), ("Ei…", True), ("Sério?", True), ("Uhum.", True), ("\"Certo.\"", True),
+                    ("Use", False), ("Vamos", False), ("CÂMERA", False), ("ão.", False), ("erda.", False),
+                    ("bar.", False), ("Susan:", False), ("000.", False), ("HRP.", False), ("A.", False)]:
+    confere(f"palavra solta {t!r}", palavra_que_e_fala(t), esperado)
 confere("grito sem ponto", caixa_alta("NÃO ACREDITO NISSO", dic), False)
 
 # ---- escuta da voz original: legenda SEM nome vira "Homem/Mulher (pela voz)"; incerta fica no narrador
@@ -249,8 +287,21 @@ confere("pedaco da MESMA legenda nao troca de voz", _e._resolver_voz(1, "...cont
                                                                      _t.time())[3], "Homem (pela voz)")
 r = _e._resolver_voz(2, "Mais três champanhes, obrigada.", "narrador", 1.0, 1.0, "", "narrador", _t.time())
 confere("legenda sem nome, voz de mulher", (r[3], r[0].startswith("mulher")) if r else None, ("Mulher (pela voz)", True))
-_e.escuta = _Escuta(_res("m", 0.2))
+# legenda com duas pessoas ("- Isso. - E você é o motorista?"): a 2a parte sai com a voz oposta
+_e._oposto = {21: 20}
+_e._voz_pag[20] = ("homem_1", 1.0, 1.0, "Homem (pela voz)", "homem")
+r = _e._resolver_voz(21, "E você é o motorista?", "narrador", 1, 1, "", "narrador", _t.time())
+confere("2a pessoa do dialogo com voz oposta", r[4] if r else None, "mulher")
+confere("separa '- A. - B.'", Nucleo._RE_DIALOGO.match("- Isso. - E você é o motorista?").groups(),
+        ("Isso.", "E você é o motorista?"))
+confere("nao separa fala com um travessao", Nucleo._RE_DIALOGO.match("- Tipo, eu nem quero ouvir essa merda."), None)
+_e.escuta = _Escuta(_res("m", 0.1))
 confere("voz incerta fica no narrador", _e._resolver_voz(3, "Hã.", "narrador", 1, 1, "", "narrador", _t.time()), None)
+# sem certeza, mas pendendo CLARAMENTE para um lado (certeza 0,2+): usa o palpite (15/11: "Lantejoulas?"
+# pendia para mulher e saia na voz de homem)
+_e.escuta = _Escuta(_res("f", 0.25))
+r = _e._resolver_voz(5, "Lantejoulas?", "narrador", 1, 1, "", "narrador", _t.time())
+confere("palpite da voz (mulher, pouca certeza)", r[3] if r else None, "Mulher (pela voz)")
 _e.escuta = _Escuta(_res(None, 0.0, voz_s=0.0))
 confere("sem fala (so musica) fica no narrador", _e._resolver_voz(4, "Polícia!", "narrador", 1, 1, "", "narrador",
                                                                   _t.time()), None)
@@ -260,6 +311,14 @@ _e.elenco.observar("Lu")                                # nome sem pista nenhuma
 r = _e._resolver_voz(5, "Cobertura!", "homem_1", 1, 1, "Lu", "homem", _t.time())
 confere("nome novo + voz de mulher -> mulher", r[4] if r else None, "mulher")
 confere("pista de voz fraca nao vale", pistas_voz(_res("m", 0.1)), [])
+
+# OCR comeu a 1a letra (legenda branca sobre fundo colorido, GTA V 14/11)
+for t, esperado in [("o roblema de lidar", "o problema de lidar"), ("com as essoas", "com as pessoas"),
+                    ("uando todo mundo", "quando todo mundo"), ("o osso quebrou", "o osso quebrou"),
+                    ("Arthur e Dutch", "Arthur e Dutch")]:
+    confere(f"letra perdida {t!r}", dic.consertar(t), esperado)
+confere("outra leitura viu a 1a letra", dic.fundir("osso disfarce vai ser", "Nosso disfarce vai ser"),
+        "Nosso disfarce vai ser")
 
 print(f"{'TUDO CERTO' if not falhas else 'FALHAS'}: {len(falhas)} problema(s)")
 for f in falhas:

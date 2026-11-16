@@ -1,3 +1,32 @@
+# Novidade de 14/11 (fim da tarde): voz Local mais encorpada
+
+- **As vozes do modo Local passam por um "polimento"**: mais grave (corpo), mais presença e menos chiado metálico. Medido contra as vozes reais do banco: o Piper saía com 12 a 24 dB a menos de grave e ~5 dB a menos de presença. Com o polimento, o Cadu fica quase igual ao narrador real em quase todas as faixas.
+- **Custo:** ~1 ms por segundo de áudio, sem estalo nas emendas e sem atrasar o 1º som.
+- **Cadu é a voz principal:** o Narrador e o Arthur (Red Dead) falam no Cadu, no tom natural.
+- **Mais vozes locais:** todas rodam no processador.
+  - **Vozes femininas de verdade (Dora, do Kokoro):** antes, mulheres e meninas eram a Faber (voz de homem) com o tom puxado para cima. Agora Lívia, Sara, Lia, Bia, Dona Vera e Dona Cida usam a Dora, cada uma num tom.
+  - **Homens:** Rogério ficou na Razo (a mais grave), Henrique no Alex (Kokoro) e Seu Jorge no Santa (Kokoro). A Jeff faz o Pedrinho.
+  - **Custo do Kokoro:** começa a falar em ~0,5 s (o Piper, em ~0,15 s) e usa +150 MB de memória. Por isso só fica nas vozes em que o Piper era pior. No config.json: `kokoro_nucleos` (padrão 4).
+  - **Instalador:** baixa a Razo e o Kokoro (~150 MB a mais).
+- No config.json: `"polir_local": false` desliga o polimento.
+- **Visão com o jogo aberto:** quando o jogo ocupa a placa de vídeo (o Red Dead deixava só 1,2 GB livres), a visão não se recusa mais a carregar: ela roda no processador. Carrega em ~6 s, usa ~670 MB de RAM e leva ~0,2 s por olhada. Isso só acontece nas primeiras falas de um personagem novo.
+
+# Novidade de 14/11 (tarde): leitura da legenda (OCR) mais certa
+
+- **Corrigido:** a procura do vídeo dentro do navegador (pelo movimento) tinha parado de funcionar e o programa lia a janela inteira.
+- **Toda legenda é lida duas vezes:** uma normal e outra só com o texto claro, sem o fundo do vídeo. Em cada trecho fica a leitura que faz mais sentido. Custa ~10 ms e só roda quando a legenda muda.
+- **Não come mais a 1ª letra:** a 2ª leitura pega uma margem maior dos lados, e o dicionário recupera a letra perdida ("roblema" → "problema", "essoas" → "pessoas", "uando" → "quando").
+- **Texto do cenário fora da fala:** uma linha que só aparece colorida, colada embaixo da legenda (o bilhete rosa "ALARME" no GTA V), não é mais lida junto.
+- **Medido nos recortes reais:** GTA V (676 recortes), palavras erradas caíram de 1244 para 775 (−38%). Outras 5 sessões (389 recortes): de 111 para 89.
+
+# Novidade de 14/11: modo Local (só vozes do PC)
+
+- **Novo botão "🏠 Local"** no alto, ao lado de Clonada e Rápida. Usa só as vozes Piper que estão no próprio PC: não depende da internet nem da Microsoft.
+- **Rápida de verdade:** o 1º som sai em ~0,13 s (mediana; máximo 0,24 s) e gera ~15x mais rápido que a fala. Com 3 falas ao mesmo tempo, ~0,3 s.
+- **Não falha:** testadas as 13 vozes do banco com 4 frases cada: 52 de 52 sem erro. Se a voz de um personagem faltar ou estiver com defeito, a fala sai na Faber, que vem com o programa.
+- **Cada personagem usa a sua voz local de reserva** (homem na Cadu, mulher/criança na Faber com o tom ajustado).
+- No config.json: `"motor": "local"`.
+
 # Novidade de 13/11 (tarde): escuta a voz original (homem ou mulher)
 
 - **Ouve a voz original do jogo/vídeo** e descobre se quem fala é homem, mulher ou criança.

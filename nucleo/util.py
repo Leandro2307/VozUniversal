@@ -90,7 +90,7 @@ PADRAO = {
     "velocidade": 1.05,
     "visao": True,                 # olhar a imagem do personagem para descobrir sexo/idade
     "escuta": True,                # ouvir a voz original do jogo (homem/mulher/crianca), ate em legenda sem nome
-    "escuta_espera_s": 1.0,        # quanto esperar (desde a legenda aparecer) ouvindo a voz antes de falar
+    "escuta_espera_s": 0.5,        # quanto esperar (desde a legenda aparecer) ouvindo a voz antes de falar
     "escuta_certeza": 0.35,        # certeza minima para trocar o narrador por voz de homem/mulher
     "narrador_sem_nome": True,     # texto sem nome de quem fala: voz do narrador
     "auto_regiao": True,           # descobrir sozinho onde fica a caixa de dialogo
@@ -106,6 +106,7 @@ PADRAO = {
     "xtts_pedacos": [8, 12, 20, 32],   # tamanho dos pedacos gerados: comeca pequeno (rapido) e cresce (sem buracos)
     "modo_legenda": True,
     "auto_pedacos": True,
+    "xtts_grafo": True,            # passo do GPT da voz clonada gravado como CUDA graph (bem mais rapido)
     "pre_buffer_ms": 120,
     "ler_dicas": False,            # "Aperte X para..." (instrucao de controle do jogo) nao e lida          # espera ate isso pelo 2o pedaco antes de comecar a falar (sem buraco)          # aumenta/diminui o 1o pedaco da voz conforme os buracos medidos          # video (tela/janela): acha a legenda sozinho a cada leitura
     "abafar_jogo": True,           # abaixa o som do jogo/video enquanto a voz em portugues fala
@@ -115,6 +116,7 @@ PADRAO = {
     "palavras_por_pedaco": 5,
     "porta": 8765,
     "jogo_fixo": "",
+    "voz_unica": "",               # botoes "Voz da Lucia"/"Voz do Jason": todos falam com essa voz ("" = desligado)
     "fonte": "auto",               # auto (jogo em 1o plano) | tela (monitor inteiro) | janela (escolhida)
     "fonte_hwnd": 0,
     "fonte_exe": "",
@@ -153,6 +155,86 @@ def semelhanca(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
 
 
+# A escuta, a visao e a voz clonada importam o `transformers` em threads diferentes; ao mesmo tempo,
+# a importacao preguicosa dele falhava (ImportError "cannot import name 'Wav2Vec2Config'", 20:25).
+TRAVA_IMPORTACAO = threading.RLock()
+
+
+class MedidorPlaca:
+    """Uso da placa de video (% de calculo e GB de memoria) lido a cada segundo pelo NVML, a
+    biblioteca que vem com o driver da NVIDIA (nvml.dll). Serve para saber, no registro, se a voz
+    clonada atrasou porque o jogo estava usando a placa toda. Sem placa NVIDIA: fica desligado."""
+
+    def __init__(self, intervalo=1.0, guardar=60):
+        self.ok = False
+        self.amostras = collections.deque(maxlen=guardar)    # (hora, % calculo, GB usados, GB total)
+        try:
+            import ctypes
+
+            class _Uso(ctypes.Structure):
+                _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
+
+            class _Mem(ctypes.Structure):
+                _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong), ("used", ctypes.c_ulonglong)]
+
+            self._nvml = ctypes.WinDLL(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "nvml.dll"))
+            if self._nvml.nvmlInit_v2() != 0:
+                return
+            self._h = ctypes.c_void_p()
+            if self._nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(self._h)) != 0:
+                return
+            self._uso, self._mem, self._byref = _Uso(), _Mem(), ctypes.byref
+            self.ok = self._ler() is not None
+        except Exception:
+            return
+        if self.ok:
+            threading.Thread(target=self._laco, args=(intervalo,), daemon=True, name="placa").start()
+
+    def _ler(self):
+        n = self._nvml
+        if n.nvmlDeviceGetUtilizationRates(self._h, self._byref(self._uso)) != 0:
+            return None
+        if n.nvmlDeviceGetMemoryInfo(self._h, self._byref(self._mem)) != 0:
+            return None
+        return (time.time(), int(self._uso.gpu), self._mem.used / 2 ** 30, self._mem.total / 2 ** 30)
+
+    def _laco(self, intervalo):
+        while True:
+            try:
+                a = self._ler()
+                if a:
+                    self.amostras.append(a)
+            except Exception:
+                pass
+            time.sleep(intervalo)
+
+    def agora(self):
+        """{"placa_pct": % de calculo agora, "placa_livre_gb": memoria livre} ou {}."""
+        if not self.amostras:
+            return {}
+        _, pct, usado, total = self.amostras[-1]
+        return {"placa_pct": pct, "placa_livre_gb": round(total - usado, 2)}
+
+    def resumo(self, segundos=30):
+        """Media e maximo do uso de calculo nos ultimos `segundos`."""
+        lim = time.time() - segundos
+        v = [a[1] for a in list(self.amostras) if a[0] >= lim]
+        if not v:
+            return {}
+        return {"placa_pct_media": round(sum(v) / len(v)), "placa_pct_max": max(v),
+                "placa_pct_90mais": round(100 * sum(1 for x in v if x >= 90) / len(v))}
+
+
+MEDIDOR_PLACA = None
+
+
+def medidor_placa():
+    global MEDIDOR_PLACA
+    if MEDIDOR_PLACA is None:
+        MEDIDOR_PLACA = MedidorPlaca()
+    return MEDIDOR_PLACA
+
+
 def memoria_livre():
     """(GB de RAM livre, GB de memoria livre na placa de video ou None)."""
     ram = vram = None
@@ -180,7 +262,7 @@ def _paginacao_livre():
         return 0.0
 
 
-def cabe(nome, ram_gb, vram_gb, contar_paginacao=False):
+def cabe(nome, ram_gb, vram_gb, contar_paginacao=False, avisar=True):
     """Ha memoria sobrando para carregar `nome` sem travar o PC? Se nao, avisa e diz que nao.
 
     contar_paginacao: sem placa NVIDIA o modelo fica na RAM; o arquivo do modelo e lido mapeado
@@ -195,6 +277,8 @@ def cabe(nome, ram_gb, vram_gb, contar_paginacao=False):
     if vram is not None and vram < vram_gb:
         falta.append(f"memória da placa de vídeo livre {vram:.1f} GB (precisa {vram_gb} GB)")
     if falta:
+        if not avisar:
+            return False
         log(f"⛔ Não carreguei {nome} para não travar o PC: " + "; ".join(falta)
             + ". Feche algo (ou o jogo) e tente de novo.", tipo="aviso")
         return False

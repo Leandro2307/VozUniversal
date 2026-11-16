@@ -59,6 +59,9 @@ header{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .seg{display:inline-flex;background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:3px}
 .seg button{background:none;border:none;padding:6px 12px;border-radius:9px;font-size:13px;font-weight:600;color:var(--suave)}
 .seg button.on{background:var(--card2);color:var(--texto);box-shadow:inset 0 0 0 1px var(--linha)}
+.btn.lucia.on{background:linear-gradient(135deg,#ff5fa2,#b06cff);border:none;color:#fff;box-shadow:0 0 14px #ff5fa255}
+.btn.dupla.on{background:linear-gradient(135deg,#ff5fa2,#2f8cff);border:none;color:#fff;box-shadow:0 0 14px #b06cff55}
+.btn.jason.on{background:linear-gradient(135deg,#2f8cff,#22c7a9);border:none;color:#fff;box-shadow:0 0 14px #2f8cff55}
 .tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#ffffff10;color:var(--suave);font-weight:600}
 
 /* ---- palco */
@@ -143,6 +146,8 @@ select{background:var(--card2);color:var(--texto);border:1px solid var(--linha);
 /* caixa */
 .caixa-wrap{display:grid;grid-template-columns:1fr 300px;gap:16px}
 .foto{position:relative;border-radius:14px;overflow:hidden;background:#000;border:1px solid var(--linha);user-select:none;min-height:200px;display:grid;place-items:center}
+.foto .quadro{position:relative;width:100%;line-height:0}
+.foto .quadro .ret span{line-height:normal}
 .foto img{display:block;width:100%;height:auto}
 .foto .ret{position:absolute;border:2px solid var(--acento2);background:#4fe0c022;border-radius:6px;pointer-events:none}
 .foto .ret.nome{border-color:var(--aviso);background:#ffcb6b22}
@@ -197,9 +202,12 @@ select{background:var(--card2);color:var(--texto);border:1px solid var(--linha);
     </div>
     <div class="jogo" id="jogo"><span class="ponto" id="ponto"></span><b id="jogoNome">Esperando um jogo…</b><span class="tag" id="jogoStatus">—</span></div>
     <div class="espaco"></div>
-    <div class="seg" id="motorSeg" title="Clonada: voz natural (placa de vídeo). Rápida: mais leve.">
-      <button data-m="clonada">✨ Clonada</button><button data-m="rapida">⚡ Rápida</button>
+    <div class="seg" id="motorSeg" title="Clonada: voz natural (placa de vídeo). Rápida: online + local. Local: só no PC, a mais rápida e sem internet.">
+      <button data-m="clonada">✨ Clonada</button><button data-m="rapida">⚡ Rápida</button><button data-m="local">🏠 Local</button>
     </div>
+    <button class="btn unica lucia" data-voz="lucia" title="Ligado: todos os personagens (e o narrador) falam com a voz da Lucia. Usa a voz Clonada.">🎙 Voz da Lucia</button>
+    <button class="btn unica jason" data-voz="jason" title="Ligado: todos os personagens (e o narrador) falam com a voz do Jason. Usa a voz Clonada.">🎙 Voz do Jason</button>
+    <button class="btn unica dupla" data-voz="dupla" title="Ligado: homens, meninos e idosos falam com a voz do Jason; mulheres, meninas e idosas com a voz da Lucia. O narrador fica com o Jason. Usa a voz Clonada.">👫 Lucia + Jason</button>
     <button class="btn" id="btnRepetir">↻ Repetir <span class="kbd">F11</span></button>
     <button class="btn prim" id="btnPausar">⏸ Pausar <span class="kbd">F10</span></button>
   </header>
@@ -352,12 +360,17 @@ function sistema(){
   const m = E.motor || {};
   const cl = {pronta:["pronta","verde"],carregando:["carregando…","amarelo"],erro:["indisponível","vermelho"],sem_memoria:["sem memória livre","vermelho"],desligada:["desligada",""]}[m.clonada] || ["—",""];
   $("#stClonada").textContent = cl[0]; $("#stClonada").className = cl[1];
-  $("#stUsando").textContent = m.usando === "clonada" ? "✨ clonada" : "⚡ rápida";
+  $("#stUsando").textContent = m.usando === "clonada" ? "✨ clonada" : m.usando === "local" ? "🏠 local" : "⚡ rápida";
   const vi = {pronta:["pronta","verde"],carregando:["carregando…","amarelo"],erro:["indisponível","vermelho"],espera:["carrega ao abrir",""],desligada:["desligada",""]}[m.visao] || ["—",""];
   $("#stVisao").textContent = vi[0]; $("#stVisao").className = vi[1];
   const es = {pronta:["pronta","verde"],carregando:["carregando…","amarelo"],erro:["indisponível","vermelho"],desligada:["desligada",""]}[m.escuta] || ["—",""];
   $("#stEscuta").textContent = es[0]; $("#stEscuta").className = es[1];
   document.querySelectorAll("#motorSeg button").forEach(b=>b.classList.toggle("on", b.dataset.m === (E.config.motor||m.escolhido)));
+  document.querySelectorAll("button.unica").forEach(b => {
+    b.classList.toggle("on", !!(E.config && E.config.voz_unica === b.dataset.voz));
+    const existe = b.dataset.voz === "dupla" ? (E.banco && E.banco.lucia && E.banco.jason) : (E.banco && E.banco[b.dataset.voz]);
+    b.style.display = existe ? "" : "none";
+  });
 }
 
 function caixaInfo(){
@@ -469,7 +482,18 @@ function logs(novo){
 // ---------------------------------------------------------------- topo: botoes
 $("#btnPausar").onclick = () => api("pausar");
 $("#btnRepetir").onclick = () => api("repetir");
-$("#motorSeg").onclick = e => { const b=e.target.closest("button"); if(!b) return; api("config",{motor:b.dataset.m}); E.config.motor=b.dataset.m; sistema(); toast(b.dataset.m==="clonada"?"Voz clonada (carrega em ~20 s na 1ª vez)":"Voz rápida"); };
+// "Voz da Lucia" / "Voz do Jason": so um ligado por vez; clicar no que esta ligado desliga
+document.querySelectorAll("button.unica").forEach(b => b.onclick = () => {
+  const vid = (E.config.voz_unica === b.dataset.voz) ? "" : b.dataset.voz;
+  api("config",{voz_unica:vid}); E.config.voz_unica = vid;
+  if (vid) E.config.motor = "clonada";     // a voz clonada so existe no modo Clonada
+  sistema();
+  const nome = (E.banco[b.dataset.voz]||{}).nome || b.dataset.voz;
+  toast(!vid ? "Vozes normais de volta"
+        : vid === "dupla" ? "👫 Homens com a voz do Jason, mulheres com a voz da Lucia"
+        : `🎙 Todos com a voz ${vid==="jason"?"do":"da"} ${nome}`);
+});
+$("#motorSeg").onclick = e => { const b=e.target.closest("button"); if(!b) return; api("config",{motor:b.dataset.m}); E.config.motor=b.dataset.m; sistema(); toast(b.dataset.m==="clonada"?"Voz clonada (carrega em ~20 s na 1ª vez)":b.dataset.m==="local"?"Voz local: só no PC, sem internet":"Voz rápida"); };
 $("#abas").onclick = e => { const b=e.target.closest("button"); if(!b) return;
   document.querySelectorAll("#abas button").forEach(x=>x.classList.toggle("on",x===b));
   document.querySelectorAll(".aba").forEach(x=>x.classList.toggle("on",x.id==="aba-"+b.dataset.a));
@@ -487,7 +511,9 @@ $("#chFixar").onclick = () => { const on=!$("#chFixar").classList.contains("on")
 let modo = null, ini = null, novo = null;
 function atualizarFoto(){
   const foto = $("#foto"); const img = new Image();
-  img.onload = () => { foto.innerHTML = ""; foto.appendChild(img); desenharRets(); };
+  // imagem e retangulos no MESMO quadro: antes os retangulos eram medidos pela caixa toda (maior que a
+  // imagem, com faixas pretas) e saiam longe de onde se clicou
+  img.onload = () => { foto.innerHTML = ""; const q=document.createElement("div"); q.className="quadro"; q.appendChild(img); foto.appendChild(q); desenharRets(); };
   img.onerror = () => { foto.innerHTML = `<span style="color:var(--suave)">Nenhum jogo aberto (ou minimizado)</span>`; };
   img.src = "/api/quadro?t=" + Date.now(); img.draggable = false;
 }
@@ -496,7 +522,7 @@ function desenharRets(){
   foto.querySelectorAll(".ret").forEach(r=>r.remove());
   const r = E.regiao;
   const add = (x0,y0,x1,y1,cls,t) => { const d=document.createElement("div"); d.className="ret "+cls;
-    Object.assign(d.style,{left:x0*100+"%",top:y0*100+"%",width:(x1-x0)*100+"%",height:(y1-y0)*100+"%"}); d.innerHTML=`<span>${t}</span>`; foto.appendChild(d); return d; };
+    Object.assign(d.style,{left:x0*100+"%",top:y0*100+"%",width:(x1-x0)*100+"%",height:(y1-y0)*100+"%"}); d.innerHTML=`<span>${t}</span>`; quadro().appendChild(d); return d; };
   if (E.modo_legenda) {
     // video achado pelo movimento e onde a ultima legenda foi lida
     if (E.video) add(...E.video, "video", "vídeo detectado");
@@ -505,6 +531,7 @@ function desenharRets(){
   const z = E.zona_nome;
   if (r && z) { const w=r[2]-r[0], h=r[3]-r[1]; add(r[0]+z[0]*w, r[1]+z[1]*h, r[0]+z[2]*w, r[1]+z[3]*h, "nome","nome"); }
 }
+function quadro(){ return $("#foto .quadro") || $("#foto"); }
 function frac(e){ const b=$("#foto img").getBoundingClientRect(); return [Math.min(1,Math.max(0,(e.clientX-b.left)/b.width)), Math.min(1,Math.max(0,(e.clientY-b.top)/b.height))]; }
 $("#btnFoto").onclick = atualizarFoto;
 async function carregarFontes(){
@@ -527,7 +554,7 @@ $("#btnMarcar").onclick = () => { if(!$("#foto img")) return toast("Atualize a f
 $("#btnNome").onclick = () => { if(!E.regiao) return toast("Marque a caixa de diálogo primeiro"); if(!$("#foto img")) return toast("Atualize a foto"); modo="nome"; $("#foto").classList.add("desenhando"); toast("Arraste sobre o nome de quem fala"); };
 $("#btnAuto").onclick = () => { api("regiao",{auto:true}); toast("Procurando sozinho nos próximos diálogos"); };
 $("#btnTiraNome").onclick = () => api("zona_nome",{zona:null});
-$("#foto").addEventListener("mousedown", e => { if(!modo) return; ini=frac(e); novo=document.createElement("div"); novo.className="ret "+(modo==="nome"?"nome":""); $("#foto").appendChild(novo); });
+$("#foto").addEventListener("mousedown", e => { if(!modo) return; ini=frac(e); novo=document.createElement("div"); novo.className="ret "+(modo==="nome"?"nome":""); quadro().appendChild(novo); });
 window.addEventListener("mousemove", e => { if(!ini||!novo) return; const p=frac(e); const x0=Math.min(ini[0],p[0]),y0=Math.min(ini[1],p[1]),x1=Math.max(ini[0],p[0]),y1=Math.max(ini[1],p[1]);
   Object.assign(novo.style,{left:x0*100+"%",top:y0*100+"%",width:(x1-x0)*100+"%",height:(y1-y0)*100+"%"}); novo._r=[x0,y0,x1,y1]; });
 window.addEventListener("mouseup", () => { if(!ini) return; const r=novo&&novo._r; ini=null; $("#foto").classList.remove("desenhando");

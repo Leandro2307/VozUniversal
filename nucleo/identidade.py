@@ -81,6 +81,23 @@ def nomes_proprios():
     return _NOMES_PROPRIOS
 
 
+def sexo_do_nome(nome):
+    """Sexo de um nome proprio CONHECIDO (recursos\nomes.txt): "Catherine" -> "f". Senao "".
+    Vale mais que a voz ouvida: na legenda a escuta muitas vezes pega o outro personagem falando
+    (a Catherine do RDR2 ficou com voz de homem idoso por isso, 15/11)."""
+    lista = nomes_proprios()
+    for p in (nome or "").lower().split():
+        p = p.strip(".,:;!?'\"()")
+        g = lista.get(p) or lista.get(sem_acento(p))
+        if g in ("f", "m"):
+            return g
+    return ""
+
+
+def _sexo_da_categoria(cat):
+    return "f" if cat in ("menina", "mulher", "idosa") else ("m" if cat else "")
+
+
 def pistas_nome(nome):
     saida = []
     if not nome:
@@ -196,6 +213,7 @@ class Visao:
     def __init__(self):
         self.pronta = False
         self.carregando = False
+        self.so_cpu = False
         self.erro = ""
         self.prox_tentativa = 0.0
         self.trava = threading.Lock()
@@ -205,9 +223,14 @@ class Visao:
         if self.pronta or self.carregando or time.time() < self.prox_tentativa:
             return
         from .util import cabe
-        if not cabe("a visão", ram_gb=3.0, vram_gb=1.5):
-            self.prox_tentativa = time.time() + 300      # tenta de novo daqui a 5 min
-            return
+        self.so_cpu = False
+        if not cabe("a visão", ram_gb=3.0, vram_gb=1.5, avisar=False):
+            # placa de video cheia (o jogo ocupa: RDR2 deixava 1,2 GB livres): o CLIP e pequeno,
+            # roda no processador. So desiste se faltar RAM tambem.
+            if not cabe("a visão", ram_gb=2.0, vram_gb=0):
+                self.prox_tentativa = time.time() + 300      # tenta de novo daqui a 5 min
+                return
+            self.so_cpu = True
         self.carregando = True
         threading.Thread(target=self._carregar, daemon=True).start()
 
@@ -216,10 +239,12 @@ class Visao:
             t0 = time.time()
             import torch
             torch.set_num_threads(2)
-            from transformers import CLIPModel, CLIPProcessor
+            from .util import TRAVA_IMPORTACAO
+            with TRAVA_IMPORTACAO:
+                from transformers import CLIPModel, CLIPProcessor
             log("Visão: carregando o modelo CLIP (a 1ª vez baixa ~600 MB)...")
             self.torch = torch
-            self.dev = "cuda" if torch.cuda.is_available() else "cpu"
+            self.dev = "cuda" if torch.cuda.is_available() and not self.so_cpu else "cpu"
             # na placa ja carrega em meia precisao: ~900 MB a menos de memoria do que carregar
             # inteiro e converter depois (medido as 04:25)
             tipo = torch.float16 if self.dev == "cuda" else torch.float32
@@ -245,6 +270,23 @@ class Visao:
             log("Visão indisponível (segue só com nome e texto):", repr(e), tipo="aviso")
         finally:
             self.carregando = False
+
+    def descarregar(self):
+        """Solta o CLIP (~0,7 GB de RAM) quando o PC fica sem memoria no meio do jogo."""
+        with self.trava:
+            if not self.pronta:
+                return False
+            self.pronta = False
+            self.modelo = self.proc = self.textos = None
+        import gc
+        gc.collect()
+        try:
+            if self.dev == "cuda":
+                self.torch.cuda.empty_cache()
+        except Exception:
+            pass
+        self.prox_tentativa = time.time() + 300          # so tenta carregar de novo daqui a 5 min
+        return True
 
     def classificar(self, imagens):
         """imagens: lista de PIL -> {categoria: probabilidade} (media das imagens), ou None."""
@@ -372,6 +414,12 @@ class Elenco:
             f["falas"] = f.get("falas", 0) + 1
             f["ultima_t"] = time.time()
             f["ultima_vez"] = time.time()
+            reservada = getattr(self.banco, "do_personagem", lambda _n: None)(nome)
+            if reservada and not f.get("fixo"):
+                # personagem com voz propria no banco (ex.: Lucia): usa ela e trava a ficha
+                v = self.banco.vozes[reservada]
+                f.update(categoria=v.get("categoria", "mulher"), voz=reservada, tom=1.0, vel=1.0,
+                         confianca=1.0, fixo=True, pistas=["voz exclusiva do banco"])
             pistas = []
             if novo:
                 pistas += pistas_nome(nome)
@@ -387,12 +435,17 @@ class Elenco:
                     f["pistas"] = (f["pistas"] + [motivo])[-8:]
             if not f.get("fixo"):
                 cat, conf = self._decidir(pontos)
+                g = sexo_do_nome(nome)
+                forcado = False
+                if g and _sexo_da_categoria(cat) != g:
+                    cat = categoria_de(g, IDADE[cat])
+                    forcado = _sexo_da_categoria(f.get("categoria")) != g
                 f["confianca"] = round(conf, 2)
                 # troca de voz so no comeco (depois de muitas falas, so se o usuario mudar)
                 # ...ou UMA vez mais tarde, se as pistas novas forem fortes (o Jack so chamou "mamãe"
                 # depois de 6 falas e ficou com voz de homem adulto)
                 tarde = (f["falas"] > 6 and conf >= 0.7 and not f.get("mudou_tarde") and not f.get("fixo"))
-                if cat != f.get("categoria") and (f.get("categoria") is None or f["falas"] <= 6 or tarde):
+                if cat != f.get("categoria") and (f.get("categoria") is None or f["falas"] <= 6 or tarde or forcado):
                     if f["falas"] > 6:
                         f["mudou_tarde"] = True
                     if f.get("categoria"):
@@ -424,6 +477,9 @@ class Elenco:
             if not f or f.get("fixo") or f.get("ouvidas", 0) >= 6:
                 return f
             pistas = pistas_voz(res)
+            g = sexo_do_nome(nome)
+            if g:
+                pistas = [pp for pp in pistas if not (pp[0] == "s" and pp[1] != g)]
             if not pistas:
                 return f
             f["ouvidas"] = f.get("ouvidas", 0) + 1

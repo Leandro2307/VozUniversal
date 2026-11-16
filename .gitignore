@@ -22,3 +22,6 @@ instalador/build/
 instalador/programa.zip
 *.spec
 Iniciar Voz Universal.bat
+recursos/kokoro/
+graphify-out/
+nucleo/graphify-out/

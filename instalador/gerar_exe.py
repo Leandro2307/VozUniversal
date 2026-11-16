@@ -17,7 +17,7 @@ BASE = os.path.dirname(AQUI)
 # o que NAO vai junto: pessoal, gerado na hora, ou baixado pelo instalador
 FORA = [
     ".git/*", "*/__pycache__/*", "__pycache__/*", "*.pyc", "config.json", "log.txt", "perfis/*",
-    "diagnostico/*", "testes/resultados/*", "recursos/janela/*", "recursos/piper_vozes/*",
+    "diagnostico/*", "testes/resultados/*", "recursos/janela/*", "recursos/piper_vozes/*", "recursos/kokoro/*",
     "banco_vozes/_originais/*", "banco_vozes/_antigas/*", "banco_vozes/*/latentes.pt",
     "dist/*", "build/*", "instalador/build/*", "instalador/dist/*", "instalador/programa.zip",
     "*.spec", "Iniciar Voz Universal.bat",

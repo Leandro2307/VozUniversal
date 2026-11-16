@@ -135,6 +135,8 @@ def em_tela_cheia(h):
 def abrir_link(h, link):
     import keyboard
     focar(h)
+    keyboard.press_and_release("ctrl+t")      # aba NOVA (nao fecha o que a pessoa estava vendo)
+    time.sleep(0.8)
     keyboard.press_and_release("ctrl+l")
     time.sleep(0.4)
     keyboard.write(link, delay=0.01)
@@ -171,7 +173,8 @@ def main():
     t0 = time.time()
     while time.time() - t0 < 120:
         e = estado()
-        if e and e["motor"]["clonada"] in ("pronta", "erro", "sem_memoria"):
+        if e and (e["motor"]["clonada"] in ("pronta", "erro", "sem_memoria")
+                  or (e["motor"]["escolhido"] != "clonada" and e["motor"]["escuta"] == "pronta")):
             break
         time.sleep(1)
     e = estado()

@@ -304,7 +304,9 @@ class Ouvido:
             import torch
             import torch.nn as nn
             from huggingface_hub import snapshot_download
-            from transformers import Wav2Vec2Config, Wav2Vec2Model, Wav2Vec2PreTrainedModel
+            from .util import TRAVA_IMPORTACAO
+            with TRAVA_IMPORTACAO:
+                from transformers import Wav2Vec2Config, Wav2Vec2Model, Wav2Vec2PreTrainedModel
 
             class Cabeca(nn.Module):
                 def __init__(self, config, n):
@@ -334,6 +336,14 @@ class Ouvido:
             cfg = Wav2Vec2Config.from_pretrained(pasta)
             self.torch = torch
             self.modelo = IdadeSexo.from_pretrained(pasta, config=cfg, use_safetensors=True).eval()
+            try:
+                # pesos em 8 bits: ~0,2 GB a menos de RAM e 0,25 s por fala em vez de 0,43 s, com a
+                # MESMA resposta nas 13 vozes do banco (medido as 20:50)
+                self.modelo = torch.ao.quantization.quantize_dynamic(self.modelo, {nn.Linear}, dtype=torch.qint8)
+                import gc
+                gc.collect()
+            except Exception as e:
+                log("Escuta: não deu para comprimir em 8 bits (segue normal):", repr(e)[:120], tipo="aviso")
             self.pronto = True
             log(f"Escuta pronta em {time.time() - t0:.1f}s (reconhece homem, mulher e criança pela voz).")
         except Exception as e:

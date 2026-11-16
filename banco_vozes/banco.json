@@ -7,8 +7,12 @@
     "velocidade": 1.03,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-ThalitaMultilingualNeural",
-      "tom": 1.12
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.15,
+      "reserva": {
+        "voz": "pt_BR-faber-medium",
+        "tom": 1.25
+      }
     }
   },
   "menino_2": {
@@ -19,8 +23,12 @@
     "velocidade": 1.04,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-FranciscaNeural",
-      "tom": 1.1
+      "voz": "fr-FR-VivienneMultilingualNeural",
+      "tom": 1.12,
+      "reserva": {
+        "voz": "pt_BR-jeff-medium",
+        "tom": 1.3
+      }
     }
   },
   "menina_1": {
@@ -31,8 +39,12 @@
     "velocidade": 1.0,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-FranciscaNeural",
-      "tom": 1.22
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.22,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.15
+      }
     }
   },
   "menina_2": {
@@ -43,8 +55,12 @@
     "velocidade": 1.0,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-ThalitaMultilingualNeural",
-      "tom": 1.25
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.25,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.2
+      }
     }
   },
   "homem_1": {
@@ -54,9 +70,13 @@
     "tom": 1.0,
     "velocidade": 1.0,
     "rapida": {
-      "motor": "piper",
-      "voz": "pt_BR-cadu-medium",
-      "tom": 0.97
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
     }
   },
   "homem_2": {
@@ -66,9 +86,13 @@
     "tom": 1.0,
     "velocidade": 1.0,
     "rapida": {
-      "motor": "piper",
-      "voz": "pt_BR-jeff-medium",
-      "tom": 1.0
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
     }
   },
   "mulher_1": {
@@ -79,8 +103,12 @@
     "velocidade": 1.0,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-FranciscaNeural",
-      "tom": 1.0
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
     }
   },
   "mulher_2": {
@@ -91,8 +119,12 @@
     "velocidade": 1.0,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-ThalitaMultilingualNeural",
-      "tom": 1.0
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
     }
   },
   "idoso_1": {
@@ -102,10 +134,15 @@
     "tom": 1.0,
     "velocidade": 0.96,
     "rapida": {
-      "motor": "piper",
-      "voz": "pt_BR-cadu-medium",
-      "tom": 0.84,
-      "velocidade": 0.92
+      "motor": "edge",
+      "voz": "it-IT-GiuseppeMultilingualNeural",
+      "tom": 0.9,
+      "velocidade": 0.92,
+      "reserva": {
+        "voz": "pt_BR-cadu-medium",
+        "tom": 0.84,
+        "velocidade": 0.92
+      }
     }
   },
   "idoso_2": {
@@ -115,10 +152,15 @@
     "tom": 0.97,
     "velocidade": 0.95,
     "rapida": {
-      "motor": "piper",
-      "voz": "pt_BR-jeff-medium",
-      "tom": 0.86,
-      "velocidade": 0.9
+      "motor": "edge",
+      "voz": "en-AU-WilliamMultilingualNeural",
+      "tom": 0.9,
+      "velocidade": 0.92,
+      "reserva": {
+        "voz": "kokoro:pm_santa",
+        "tom": 0.92,
+        "velocidade": 0.9
+      }
     }
   },
   "idosa_1": {
@@ -129,9 +171,14 @@
     "velocidade": 0.92,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-FranciscaNeural",
+      "voz": "fr-FR-VivienneMultilingualNeural",
       "tom": 0.9,
-      "velocidade": 0.9
+      "velocidade": 0.9,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.9,
+        "velocidade": 0.9
+      }
     }
   },
   "idosa_2": {
@@ -144,7 +191,12 @@
       "motor": "edge",
       "voz": "pt-BR-ThalitaMultilingualNeural",
       "tom": 0.88,
-      "velocidade": 0.9
+      "velocidade": 0.9,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.86,
+        "velocidade": 0.88
+      }
     }
   },
   "narrador": {
@@ -154,9 +206,54 @@
     "tom": 1.0,
     "velocidade": 1.05,
     "rapida": {
-      "motor": "piper",
-      "voz": "pt_BR-faber-medium",
-      "tom": 1.0
+      "motor": "edge",
+      "voz": "pt-BR-AntonioNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-cadu-medium",
+        "tom": 1.0
+      }
+    }
+  },
+  "lucia": {
+    "nome": "Lucia",
+    "categoria": "mulher",
+    "descricao": "Lucia (clonada da ElevenLabs): só para a personagem Lucia",
+    "exclusiva": true,
+    "personagens": [
+      "Lucia",
+      "Lúcia"
+    ],
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    }
+  },
+  "jason": {
+    "nome": "Jason",
+    "categoria": "homem",
+    "descricao": "Jason (clonado da ElevenLabs): só para o personagem Jason",
+    "exclusiva": true,
+    "personagens": [
+      "Jason"
+    ],
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
     }
   }
 }

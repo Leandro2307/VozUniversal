@@ -124,6 +124,17 @@ def rodar(nome, ajustes):
         if narr.clonada:
             narr.clonada.latentes(vid)
 
+    # escuta simulada: como no jogo, espera ate `escuta_sim` s desde a legenda aparecer (ouvindo a voz
+    # original) e usa a voz `voz_sim` (no jogo sem nomes, todo homem vira "Homem (pela voz)")
+    if cfg.get("escuta_sim") is not None:
+        espera_sim, voz_sim = float(cfg["escuta_sim"]), cfg.get("voz_sim", "homem_2")
+
+        def resolver(pag, texto, voz, tom, vel, quem, cat, visto):
+            time.sleep(max(0.0, visto + espera_sim - time.time()))
+            return voz_sim, 1.0, 1.0, "Homem (pela voz)", "homem"
+        narr.resolver_voz = resolver
+        if cfg.get("antecipar_sim", True):
+            narr.candidatas_voz = lambda texto, voz, tom, vel, quem, cat: [(voz_sim, 1.0, 1.0)]
     leitor = Leitor(cfg)
     print(f"\n▶ Rodando '{nome}' ({len([e for e in seq if e['texto']])} legendas, {seq[-1]['t']:.0f}s) com "
           f"motor {cfg.get('motor')}" + (f", ajustes {ajustes}" if ajustes else "") + "...")
@@ -138,6 +149,11 @@ def rodar(nome, ajustes):
             atual = seq[i]["texto"]
             if atual:
                 diag.ev("leitura", texto=atual, nome=seq[i].get("nome", ""))
+                if cfg.get("previa_sim", True):     # como o nucleo: pede a voz na 1a leitura
+                    from nucleo.leitor import dividir_frases as _df
+                    for _fr in _df(atual):
+                        if _fr.rstrip("\"')")[-1:] in ".!?…":
+                            narr.previa(_fr, "narrador", 1.0, 1.0, "", "narrador")
             i += 1
         for fala, nova, visto in leitor.tick(atual, time.time()):
             narr.falar(fala, "narrador", nova=nova, visto=visto)

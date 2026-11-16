@@ -25,7 +25,17 @@ NOME = "Voz Universal"
 DESTINO_PADRAO = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "VozUniversal")
 UV_URL = "https://github.com/astral-sh/uv/releases/download/0.5.11/uv-x86_64-pc-windows-msvc.zip"
 PIPER = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/{v}/medium/pt_BR-{v}-medium.onnx"
-PIPER_VOZES = ["faber", "cadu", "jeff"]
+PIPER_VOZES = ["faber", "cadu", "jeff", "razo"]
+# a Razo (masculina, grave) nao esta no catalogo oficial: vem do repositorio do autor, versao fixa,
+# e o arquivo de configuracao la se chama config.json
+PIPER_FORA = {"razo": ("https://huggingface.co/Lucasllfs/Razo-piper-voice/resolve/"
+                       "46dd003f38701c81bc5c0b21b55923d8421a884c/pt-BR-razo-medium.onnx",
+                       "https://huggingface.co/Lucasllfs/Razo-piper-voice/resolve/"
+                       "46dd003f38701c81bc5c0b21b55923d8421a884c/config.json")}
+KOKORO_PACOTES = ["kokoro-onnx==0.6.1", "espeakng-loader==0.2.4", "phonemizer==3.6.0", "dlinfo==2.0.0"]
+_KOKORO_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
+KOKORO_ARQUIVOS = [("kokoro-v1.0.int8.onnx", _KOKORO_URL + "kokoro-v1.0.int8.onnx"),   # 92 MB
+                   ("voices-v1.0.bin", _KOKORO_URL + "voices-v1.0.bin")]               # 28 MB
 SEM_JANELA = 0x08000000
 
 
@@ -191,14 +201,22 @@ class Instalacao:
                     raise
                 self.avisar("O antivírus segurou alguns arquivos; tentando de novo em 15 s...", None)
                 time.sleep(15)
+        # Kokoro sem as dependencias: o kokoro-onnx pede numpy 2, que quebraria o resto
+        self.rodar([self.uv, "pip", "install", "--python", self.py, "--no-deps"] + KOKORO_PACOTES,
+                   "Instalando as vozes Kokoro...", 70, 70, env_uv)
 
         # 4) vozes Piper
         pasta_piper = os.path.join(self.destino, "recursos", "piper_vozes")
         for i, v in enumerate(PIPER_VOZES):
             arq = os.path.join(pasta_piper, f"pt_BR-{v}-medium.onnx")
-            for ext in ("", ".json"):
+            urls = PIPER_FORA.get(v) or (PIPER.format(v=v), PIPER.format(v=v) + ".json")
+            for ext, url in zip(("", ".json"), urls):
                 if not os.path.exists(arq + ext):
-                    self.baixar(PIPER.format(v=v) + ext, arq + ext, f"Baixando voz rápida {v}", 70 + i * 3, 73 + i * 3)
+                    self.baixar(url, arq + ext, f"Baixando voz rápida {v}", 70 + i * 2, 72 + i * 2)
+        pasta_kokoro = os.path.join(self.destino, "recursos", "kokoro")
+        for i, (arq, url) in enumerate(KOKORO_ARQUIVOS):
+            if not os.path.exists(os.path.join(pasta_kokoro, arq)):
+                self.baixar(url, os.path.join(pasta_kokoro, arq), "Baixando as vozes Kokoro", 78 + i, 79 + i)
 
         # 5) modelo da voz clonada (baixa uma vez agora, para a 1a abertura ser rapida)
         self.rodar([self.py, "-c",

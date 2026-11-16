@@ -319,7 +319,30 @@ def limpar(t):
     t = re.sub(r"(?<![\w(])\(\)(?=[a-zà-ÿ])", "O", t)
     t = re.sub(r"(?<![\w\d])0(?=[a-zà-ÿ])", "O", t)
     t = re.sub(r"(?<![\w\d])01(?=[?!])", "Oi", t)
+    # marcacao de idioma antes da fala ("[Espanhol] Vai, vai!" lido "Espanhol Vai, vai!"): nao e fala
+    t = _RE_IDIOMA.sub("", t)
+    # travessao solto grudado no comeco de uma palavra no meio da frase ("então -só deixa"): lixo do
+    # OCR. Hifen DENTRO da palavra ("viva-voz") e o travessao de dialogo ("- Ei. - Tipo") ficam
+    t = re.sub(r"([^\W\d_][,;:]?\s)[-–—](?=[^\W\d_])", r"\1", t)
     return re.sub(r"\s+", " ", t).strip()
+
+
+_RE_IDIOMA = re.compile(r"^[\s\[(\-–—]*(?i:em\s+)?(?i:espanhol|ingl[eê]s|franc[eê]s|italiano|alem[aã]o|russo|"
+                        r"japon[eê]s|chin[eê]s|[aá]rabe|coreano|portugu[eê]s|crioulo|haitiano|polon[eê]s|hebraico|latim)"
+                        r"[\s\])\-–—:]+(?=[\-–—\"'¿¡]*[A-ZÀ-Ý])[\-–—\s]*")
+
+
+def isolar_contorno(img, lo=205, escuro=110, raio=7):
+    """Texto BRANCO com SOMBRA/CONTORNO escuro (legenda de video e de jogo) em preto sobre branco.
+    Luz clara do cenario atras da legenda (lampadas do espelho, ceu) nao tem contorno escuro e some
+    (no suavizar ela virava "texto" e o OCR embaralhava: "bo i o" por "bonito"). Medido em 22
+    recortes da cena do espelho: 17 leituras perfeitas, contra 1 do jeito antigo (15/11)."""
+    from PIL import ImageFilter
+    a = np.asarray(img.convert("RGB")).astype(np.int16)
+    v = a.max(-1)
+    claro = (v >= lo) & (v - a.min(-1) <= 60)
+    perto = np.asarray(Image.fromarray(((v < escuro) * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(raio))) > 0
+    return Image.fromarray(np.where(claro & perto, 0, 255).astype(np.uint8)).convert("RGB")
 
 
 def suavizar(img, lo=90, hi=200):
@@ -462,6 +485,22 @@ def rotulos(t):
     return sum(p[0].isupper() for p in ps) / len(ps) >= 0.75
 
 
+def palavra_que_e_fala(t):
+    """Uma palavra sozinha so e fala se terminar como frase. "Vamos!" e "Sério?" sempre; com ponto
+    ou reticencias ("Vamos.", "Não.", "Amigão...") so se comecar com maiuscula: minuscula e pedaco
+    cortado pelo OCR ("ão.", "erda.", "bar."). Sem pontuacao e botao/rotulo ("Use", "CÂMERA").
+    Antes so aceitava "!" e "?": "Vamos." (8x), "Não.", "Valeu.", "Oi." etc. nao eram faladas (14/11)."""
+    t = t.strip().rstrip("\"')»”")
+    letras = re.findall(r"[^\W\d_]", t)
+    if len(letras) < 2:
+        return False
+    if t[-1:] in "!?":
+        return True
+    if t[-1:] in ".…":
+        return letras[0].isupper() and not t.isupper()
+    return False
+
+
 def achar_legenda(img, linhas=None, dic=None, motivos=None):
     """Na parte de baixo de um video, acha o bloco que e a LEGENDA: centralizado na horizontal
     (titulo de capitulo do YouTube, relogio e botoes ficam de lado), com cara de frase.
@@ -498,13 +537,13 @@ def achar_legenda(img, linhas=None, dic=None, motivos=None):
             if max(xs) - min(xs) <= 0.012 * w and max(larguras) - min(larguras) >= 0.12 * w:
                 fora(t, "menu de escolhas")
                 continue
-        if len(t.split()) < 2 and t[-1:] not in "!?":
+        if len(t.split()) < 2 and not palavra_que_e_fala(t):
             fora(t, "palavra solta")
             continue                                   # palavra solta: botao/rotulo
         if not com_nome and len(t.split()) <= 3 and t.rstrip("\"')")[-1:] not in FIM + ",":
             fora(t, "rotulo curto do jogo")
             continue                                   # "Mais rápido", "Acelerar (Segurar)": HUD
-        if re.fullmatch(r"[\d:/ .-]+", t):
+        if re.fullmatch(r"[\d:/ .-]+", t) or eh_relogio(t):
             fora(t, "relogio")
             continue                                   # relogio do video
         if eh_interface(t):
@@ -551,6 +590,7 @@ class DetectorVideo:
 
     W, H = 192, 108
     JANELA_S = 20.0
+    AQUECER_S = 6.0           # nos primeiros segundos todo movimento conta (acha o video inteiro)
 
     def __init__(self):
         self.ant = None
@@ -559,6 +599,8 @@ class DetectorVideo:
         self.confianca = 0.0
         self.manchas = collections.deque(maxlen=200)    # (instante, retangulo)
         self.limite = None        # janela da frente em fracoes da tela
+        self.excluir = []         # janelas do proprio programa (fracoes da tela): nunca sao video
+        self.nucleo = None        # parte que com certeza e video (sem rolagem/miniaturas)
         self.assinatura = None
         self.desde = time.time()
 
@@ -575,6 +617,25 @@ class DetectorVideo:
             return True
         return False
 
+    @staticmethod
+    def _separar(cru, ys, xs):
+        """Mancha que junta o player e a coluna de miniaturas do YouTube (coladas): corta onde
+        ha uma faixa de colunas PARADAS (o fundo da pagina entre os dois)."""
+        bloco = cru[ys, xs]
+        if bloco.shape[1] < 12:
+            return [(ys, xs)]
+        col = bloco.mean(axis=0)
+        partes, ini = [], None
+        for j, v in enumerate(list(col) + [0.0]):
+            if v >= 0.04 and ini is None:
+                ini = j
+            elif v < 0.04 and ini is not None:
+                partes.append((ini, j))
+                ini = None
+        if len(partes) <= 1:
+            return [(ys, xs)]
+        return [(ys, slice(xs.start + a, xs.start + b)) for a, b in partes if b - a >= 3]
+
     def olhar(self, img):
         a = np.asarray(img.convert("L").resize((self.W, self.H), Image.BILINEAR), np.float32)
         if self.ant is not None and a.shape == self.ant.shape:
@@ -590,30 +651,83 @@ class DetectorVideo:
             x0, y0, x1, y1 = self.limite
             m[int(y0 * self.H):int(np.ceil(y1 * self.H)), int(x0 * self.W):int(np.ceil(x1 * self.W))] = 1
             calor = calor * m
-        ativo = ndimage.binary_closing(calor > 0.2, structure=np.ones((3, 3)), iterations=1)
+        for x0, y0, x1, y1 in self.excluir:
+            # janela do proprio programa por cima do navegador (a foto do painel muda): nao e video
+            calor = calor.copy() if calor is self.calor else calor
+            calor[max(0, int(y0 * self.H)):int(np.ceil(y1 * self.H)), max(0, int(x0 * self.W)):int(np.ceil(x1 * self.W))] = 0
+        cru = calor > 0.2
+        ativo = ndimage.binary_closing(cru, structure=np.ones((3, 3)), iterations=1)
         rotulos, n = ndimage.label(ativo)
         agora = time.time()
         if n:
             tamanhos = ndimage.sum(ativo, rotulos, range(1, n + 1))
             for i, (ys, xs) in enumerate(ndimage.find_objects(rotulos)):
-                caixa = (ys.stop - ys.start) * (xs.stop - xs.start)
-                cheio = tamanhos[i] / max(1, caixa)
-                # mancha de video: razoavel e CHEIA (texto rolando e o mouse sao ralos/pequenos)
-                if caixa / (self.W * self.H) >= 0.01 and cheio >= 0.35:
-                    self.manchas.append((agora, [xs.start / self.W, ys.start / self.H,
-                                                 xs.stop / self.W, ys.stop / self.H]))
-                    self.confianca = round(float(cheio), 2)
-        recentes = [r for t, r in self.manchas if agora - t <= self.JANELA_S]
+                for ys2, xs2 in self._separar(cru, ys, xs):
+                    caixa = (ys2.stop - ys2.start) * (xs2.stop - xs2.start)
+                    cheio = (float(ativo[ys2, xs2].sum()) if (ys2, xs2) != (ys, xs) else tamanhos[i]) / max(1, caixa)
+                    # mancha de video: razoavel e CHEIA (texto rolando e o mouse sao ralos/pequenos)
+                    if caixa / (self.W * self.H) >= 0.01 and cheio >= 0.35:
+                        r = [xs2.start / self.W, ys2.start / self.H, xs2.stop / self.W, ys2.stop / self.H]
+                        # NUCLEO = movimento dentro do video ja achado (ou nos primeiros segundos)
+                        nuc = self.nucleo
+                        dentro = nuc is None or agora - self.desde < self.AQUECER_S or not (
+                            r[0] < nuc[0] - 0.04 or r[1] < nuc[1] - 0.04 or r[2] > nuc[2] + 0.04 or r[3] > nuc[3] + 0.04)
+                        self.manchas.append([agora, r, dentro])
+                        self.confianca = round(float(cheio), 2)
+        recentes = [m for m in self.manchas if agora - m[0] <= self.JANELA_S]
         if not recentes:
             return self.rect
-        r = [min(x[0] for x in recentes), min(x[1] for x in recentes),
-             max(x[2] for x in recentes), max(x[3] for x in recentes)]
+        # Movimento FORA do nucleo (rolar a pagina, abrir outra, mouse nas miniaturas do YouTube,
+        # cena mais larga) so entra no video ENQUANTO continua aparecendo, e so vira nucleo se
+        # durar mais de 4 s (cena larga de verdade). Antes qualquer movimento esticava o "video"
+        # ate a pagina inteira por 20 s e a legenda, no meio do player, era jogada fora como
+        # "fora do centro" (15/11: "a legenda so pega em tela cheia").
+        extras = [m for m in recentes if not m[2]]
+        aceitas = []
+        for m in extras:
+            if agora - m[0] > 5.0:
+                continue
+            if self.nucleo is not None and not _sobrepoe(m[1], self.nucleo):
+                continue          # longe do video (miniatura, outra parte da pagina)
+            viz = {m2[0] for m2 in extras if _sobrepoe(m[1], m2[1])}
+            if len(viz) >= 8 and max(viz) - min(viz) >= 2.5:
+                aceitas.append(m[1])
+                if len(viz) >= 16 and max(viz) - min(viz) >= 4.0:
+                    m[2] = True
+        nucleo = [m[1] for m in recentes if m[2]]
+        if nucleo:
+            self.nucleo = _uniao(nucleo)
+        usar = nucleo + aceitas
+        if not usar:
+            return self.rect
+        r = _uniao(usar)
         if (r[2] - r[0]) * (r[3] - r[1]) >= 0.03:
             self.rect = r
         return self.rect
 
 
+def _sobrepoe(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _uniao(rs):
+    return [min(x[0] for x in rs), min(x[1] for x in rs), max(x[2] for x in rs), max(x[3] for x in rs)]
+
+
 # ----------------------------------------------------------------- dicionario (conserta o OCR)
+_FREQ = {}        # frequencia das palavras do portugues (preenchida pelo Dicionario)
+
+
+def palavra_comum(t):
+    """ "Até", "Com", "Ei", "Tipo": palavra MUITO usada do portugues, nao nome de quem fala
+    (em video legendado, a 1a linha curta "Até" virava personagem e roubava a voz das falas)."""
+    t = t.strip()
+    if not t or " " in t:
+        return False
+    from .identidade import nomes_proprios
+    return _FREQ.get(t.lower(), 0) >= 100000 and t.lower() not in nomes_proprios()
+
+
 class Dicionario:
     TROCAS = [("ri", "n"), ("rn", "m"), ("m", "rn"), ("ii", "n"), ("cl", "d"), ("vv", "w"),
               ("1", "l"), ("0", "o"), ("I", "l"), ("l", "I"), ("l", "i"), ("i", "l")]
@@ -632,6 +746,8 @@ class Dicionario:
             except Exception as e:
                 log("Dicionário não carregado:", e)
         self.ok = len(self.freq) > 1000
+        if self.ok and not _FREQ:
+            _FREQ.update(self.freq)
 
     def aprender(self, palavra):
         self.freq[palavra.lower()] = 10 ** 7
@@ -658,12 +774,38 @@ class Dicionario:
             sa, sb = ta[i1:i2], tb[j1:j2]
             if op == "equal" or not sa or not sb:
                 out += sa
+            elif len(sa) == len(sb) and all(self._mesma_sem_1a(x, y) for x, y in zip(sa, sb)):
+                out += sb          # "osso" / "Nosso": a outra leitura viu a 1a letra
             elif (self.desconhecidas(" ".join(sb)) < self.desconhecidas(" ".join(sa))
                   and semelhanca(normalizar("".join(sa)), normalizar("".join(sb))) >= 0.5):
                 out += sb
             else:
                 out += sa
         return " ".join(out)
+
+    @staticmethod
+    def _mesma_sem_1a(a, b):
+        """b e a palavra a com uma letra a mais no comeco (o OCR comeu a 1a letra em a)."""
+        na, nb = normalizar(a), normalizar(b)
+        return len(nb) == len(na) + 1 and nb[1:] == na and nb[:1].isalpha()
+
+    def letra_perdida(self, tok):
+        """Palavra que nao existe e que, com UMA letra a mais no comeco, e palavra comum: o OCR comeu
+        a 1a letra ("roblema" -> "problema", "essoas" -> "pessoas", "uando" -> "quando"). Era o erro
+        mais comum na legenda branca sobre fundo colorido (GTA V, 14/11)."""
+        m = re.match(r"^(\W*)([^\W\d_]{3,})(\W*)$", tok)
+        if not m or self.freq.get(m.group(2).lower(), 0) >= 50:
+            return tok
+        ini, pal, fim = m.groups()
+        base = pal.lower()
+        cands = sorted(((self.freq.get(c + base, 0), c + base) for c in "abcdefghijlmnopqrstuvxzç"),
+                       reverse=True)
+        (f1, c1), (f2, _) = cands[0], cands[1]
+        if f1 < 300 or f1 < 10 * max(1, f2):
+            return tok                       # nenhuma, ou mais de uma palavra possivel: nao chuta
+        if pal[:1].isupper():
+            c1 = c1[:1].upper() + c1[1:]
+        return ini + c1 + fim
 
     def acentuar(self, tok):
         m = re.match(r"^(\W*)(.*?)(\W*)$", tok, re.S)
@@ -808,6 +950,8 @@ class Dicionario:
                 novo = self.trocar_acento(tok)
             if novo == tok:
                 novo = self.acentuar(tok)
+            if novo == tok and not self.conhece(tok):
+                novo = self.letra_perdida(tok)
             if novo != tok:
                 out.append(novo)
                 inicio = tok[-1:] in FIM
@@ -850,7 +994,20 @@ _NAO_E_NOME = {"atencao", "atenção", "dica", "nota", "aviso", "objetivo", "mis
 INTERFACE = re.compile(r"\b(pesquisar|inscrever-se|mostrar mais|mostrar menos|compartilhar|salvar|"
                        r"reproduzir|anúncio|próximo|pular)\b", re.I)            # so em texto curto (botao)
 INTERFACE_SEMPRE = re.compile(r"(visualizaç|inscritos|pular anúncio|\bhá \d+ (anos?|meses|dias)\b|"
-                              r"\besc\b|full ?screen|sair da tela cheia)", re.I)
+                              r"\besc\b|full ?screen|sair da tela cheia|esrb\.org|inappropriate for children|"
+                              # miniaturas da pagina inicial do YouTube tocam previa sozinhas e o
+                              # titulo era lido como legenda ("Haka 120 assistindo", 15/11)
+                              r"\d+\s*(mil\s+)?assistindo|\bspeedrun\b|\bwr attempt\b|(?-i:\bAO VIVO\b)|"
+                              r"\d+\s*(mil|mi)\s+(de\s+)?visualiza|\bhá \d+ (horas?|minutos?|semanas?)\b|"
+                              # aviso do Chrome quando um site grava a tela (15/11 foi falado)
+                              r"compartilhando sua tela|parar de compartilhar|is sharing your screen|"
+                              r"^o app \S+\.\S+ est|\bonrender\.com\b|^o app (\S+ )?est[áa] compart)", re.I)
+
+
+def eh_relogio(t):
+    """Tempo do player ("I I 7:09 26.49", "0:42 / 12:30"): tem hora e nenhuma palavra de verdade.
+    (sessao de 15/11: o tempo do YouTube no canto foi falado como fala)"""
+    return bool(re.search(r"\d{1,2}:\d{2}", t)) and not re.search(r"[A-Za-zÀ-ÿ]{3,}", t)
 
 
 def eh_interface(t):
@@ -864,8 +1021,11 @@ def eh_interface(t):
 
 # instrucao de controle do jogo ("Aperte O para acalmar o cavalo", "Segure para mirar") e acao com o
 # botao no fim ("Abrir algibeira O", "Falar A", "Pular +")
-DICA_CONTROLE = re.compile(r"^(aperte|pressione|segure|mantenha|use|clique|toque|solte)\b.*\bpara\b"
-                           r"|^(\S+\s){0,3}\S+\s(?:[A-Z]|[+\-]|LB|RB|LT|RT|ZL|ZR|L|R)$", re.I)
+# (com um icone antes lido como letra solta: "A Puxe para cima para uma busca", celular do GTA 6)
+DICA_CONTROLE = re.compile(r"^(?:[A-Z0-9]\s)?(aperte|pressione|segure|mantenha|use|clique|toque|solte|puxe|"
+                           r"deslize|arraste|role|gire)\b.*\b(?:para|pra|pam|pana)\b"
+                           r"|^(\S+\s){0,3}\S+\s(?:[A-Z]|[+\-]|LB|RB|LT|RT|ZL|ZR|L|R)$"
+                           r"|^para selecionar\b|\bem qualquer direção\.?$", re.I)
 
 # barra de comandos do jogo ("Mover para frente trás Co Girar (segurar) n Cancelar"): os botoes viram
 # lixo no OCR e cada comando comeca com maiuscula
@@ -899,7 +1059,10 @@ _VERBOS_OBJETIVO = set("""derrote siga va vá pegue mate encontre volte proteja 
  atire investigue aproxime-se aproxime reverta conecte entre saia suba desca desça corra pule colete leve
  traga fale espere escape esconda-se esconda segure aperte pressione mire procure vasculhe roube amarre
  acompanhe alcance destrua elimine defenda sobreviva escolte cavalgue galope beba coma durma socialize
- converse cumprimente dance brinde explore visite compre venda entregue retorne vá descubra observe""".split())
+ converse cumprimente dance brinde explore visite compre venda entregue retorne vá descubra observe
+ coloque ponha vista tire selecione abra feche acenda apague retire recupere dirija atravesse cruze chegue
+ alimente escove acalme laceie lace sele domine guarde jogue carregue empurre arrombe
+ capture resgate salve cace esfole pesque amanse leve-o leve-a solte dome desmonte""".split())
 
 
 def _cara_de_nome(t):
@@ -913,13 +1076,18 @@ def _cara_de_nome(t):
         return False
     if t.strip().lower() in _NAO_E_NOME:
         return False
+    if len(ps) == 1 and palavra_comum(t.strip(" :")):
+        return False
+    if len(ps) >= 2 and ps[0].lower() in _NAO_COMECA_NOME:
+        return False                                  # "Vocês fora" (linha de cima de "Vocês foram bem.")
     if len(ps) >= 2 and ps[-1].isdigit():          # "Guarda 2", "Soldado 1"
         ps = ps[:-1]
         t = " ".join(ps)
         if t.lower() in _NAO_E_NOME:               # "Capítulo 2", "Parte 3" nao sao personagem
             return False
     letras = re.sub(r"[^\wÀ-ÿ]", "", t)
-    if len(letras) < 2 or any(c.isdigit() for c in letras):
+    # 3+ letras: "Bo" (pedaco de "Bom, o Brian...") virava quem fala (15/11)
+    if len(letras) < 3 or any(c.isdigit() for c in letras):
         return False
     if ps[0].lower() in _VERBOS_OBJETIVO:
         return False                                  # "Derrote o atacante" nao e "Derrote: ..."
@@ -933,7 +1101,7 @@ _OCR_INICIO = [(r"^[lI|1]\)", "D"), (r"^\(\)", "O"), (r"^0(?=[a-z])", "O"), (r"^
                (r"^Il(?=[aeiou][a-z])", "H"), (r"^[I|l]['’`](?=[a-z]{4})", "T"),
                (r"^[lI|]h(?=[a-z]{3,})", "D")]   # "lhltch" -> "Dltch" (Dutch)   # "I'estemunha"
 # 1a palavra que nunca e nome de quem fala ("Ele disse: ..." / "Eu acho: ...")
-_NAO_COMECA_NOME = {"ele", "ela", "eu", "voce", "você", "nos", "nós", "eles", "elas", "isso", "isto", "aqui",
+_NAO_COMECA_NOME = {"ele", "ela", "eu", "voce", "você", "voces", "vocês", "nos", "nós", "eles", "elas", "tu", "a gente", "isso", "isto", "aqui",
                     "ali", "la", "lá", "mas", "e", "o", "a", "os", "as", "um", "uma", "se", "quando", "entao",
                     "então", "por", "para", "que", "como", "veja", "olha", "disse", "tipo"}
 
@@ -962,6 +1130,13 @@ def consertar_prefixo(linha):
     return linha
 
 
+# palavras de conversa que nunca fazem parte de um nome ("Ok você tá" nao e personagem)
+_PALAVRAS_DE_FALA = {"você", "voce", "vocês", "voces", "tá", "ta", "tô", "to", "eu", "tu", "é", "não", "nao",
+                     "sim", "ok", "já", "ja", "aqui", "agora", "cê", "ce", "tão", "tao",
+                     # 'Só fala: "Oi, prazer"' virava a personagem "Sofia" (15/11)
+                     "só", "so", "fala", "falou", "disse", "diz", "dizer", "falar", "pergunta", "responde"}
+
+
 def _nome_com_minuscula(t):
     """ "Pessoa desconhecida", "Homem misterioso": 1a maiuscula, ate 3 palavras, nao comeca
     com pronome/verbo (senao "Ele disse: ..." viraria nome)."""
@@ -971,6 +1146,8 @@ def _nome_com_minuscula(t):
         t = " ".join(ps)
     if t.strip().lower() in _NAO_E_NOME:
         return False
+    if any(p.lower() in _PALAVRAS_DE_FALA for p in ps):
+        return False                                  # "Ok você tá" (da fala "Ok, você tá parecendo...")
     return (1 <= len(ps) <= 3 and ps[0][:1].isupper() and ps[0].lower() not in _NAO_COMECA_NOME
             and ps[0].lower() not in _VERBOS_OBJETIVO        # "Socialize com: os convidados"
             and len(t) <= 28 and all(p.replace("-", "").isalpha() for p in ps))
@@ -1020,10 +1197,18 @@ def separar_nome(linhas, zona_nome=None, tam=None):
     if m_pd:
         nome_pd = "Pessoa desconhecida" + (f" {m_pd.group(1)}" if m_pd.group(1) else "")
         return nome_pd, [(m_pd.group(2),) + tuple(primeira[1:])] + linhas[1:]
+    # lixo curto antes do "Nome:" ("e Guarda 2: Por que...", "- Guarda 2: Anda!"): tira, se o que
+    # sobra comeca com um nome de verdade (15/11: o "Guarda 2:" era falado e na voz do outro)
+    m_lixo = re.match(r"^(?:[-–—•'\"|]+\s*|[a-zà-ÿ]{1,2}\s+)(?=[A-ZÀ-Ý][^:：]{1,26}[:：]\s)", primeira[0])
+    if m_lixo:
+        resto_l = primeira[0][m_lixo.end():]
+        m_t = _PREFIXO.match(resto_l)
+        if m_t and _cara_de_nome(m_t.group(1)):
+            primeira = (resto_l,) + tuple(primeira[1:])
     m = _PREFIXO.match(primeira[0])
     if m and m.group(2)[:1].isdigit():
         m = None                       # "São 10:30 da manhã": horario, nao "Nome: fala"
-    if m and (_cara_de_nome(m.group(1)) or _nome_com_minuscula(m.group(1))):
+    if m and (_cara_de_nome(m.group(1)) or (_nome_com_minuscula(m.group(1)) and not palavra_comum(m.group(1)))):
         resto = (m.group(2),) + tuple(primeira[1:])
         return m.group(1).strip(), [resto] + linhas[1:]
     # lixo antes do nome ("' hornas l)ownes: Eu nao tenho nada."): tenta so a ultima palavra

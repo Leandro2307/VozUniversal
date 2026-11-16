@@ -154,3 +154,17 @@ yarl==1.25.1
 zstandard==0.25.0
 comtypes==1.5.0
 pycaw==20260927
+# Kokoro (vozes locais Dora/Alex/Santa): o kokoro-onnx, o phonemizer e o espeakng-loader sao
+# instalados a parte com --no-deps (o kokoro-onnx pede numpy 2, mas funciona com o 1.26 testado).
+segments==2.4.0
+csvw==4.2.0
+isodate==0.7.2
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+language-tags==1.3.2
+rdflib==7.6.0
+referencing==0.37.0
+rfc3986==1.5.0
+rpds-py==2026.9.1
+termcolor==3.3.0
+uritemplate==4.2.0

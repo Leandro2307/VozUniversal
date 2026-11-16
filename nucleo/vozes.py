@@ -4,6 +4,7 @@
 Motor "clonada": XTTS v2 na placa de video, clonando a amostra de cada voz do banco.
                  Fala em streaming (comeca a tocar antes de terminar de gerar).
 Motor "rapida":  Piper (local, CPU) + Edge (online); serve tambem de reserva.
+Motor "local":   so o Piper (no proprio PC, sem internet): o mais rapido e nunca depende da rede.
 
 O tom de cada personagem e mudado reamostrando o audio (sobe/desce a voz inteira, como um
 "pitch" de verdade) e a velocidade e compensada na geracao, entao o ritmo nao muda.
@@ -22,9 +23,11 @@ import numpy as np
 
 from .diagnostico import diag
 from .leitor import dividir_frases
-from .util import BANCO, PIPER_DIR, log, normalizar, ler_json, gravar_json
+from .util import BANCO, PIPER_DIR, RECURSOS, log, normalizar, ler_json, gravar_json
 
 os.environ["COQUI_TOS_AGREED"] = "1"
+KOKORO = "kokoro:"                                # voz local "kokoro:pf_dora" = Kokoro, nao Piper
+KOKORO_DIR = os.path.join(RECURSOS, "kokoro")
 
 
 # ----------------------------------------------------------------- texto -> fala
@@ -171,6 +174,84 @@ class TiraSilencio:
         return r
 
 
+def _biquad(tipo, f0, sr, ganho_db=0.0, q=0.707):
+    """Um filtro de 2a ordem (receitas do "Audio EQ Cookbook") em formato sos do scipy."""
+    A = 10 ** (ganho_db / 40)
+    w0 = 2 * np.pi * f0 / sr
+    c, alfa = np.cos(w0), np.sin(w0) / (2 * q)
+    if tipo == "passa_alta":
+        b = [(1 + c) / 2, -(1 + c), (1 + c) / 2]
+        a = [1 + alfa, -2 * c, 1 - alfa]
+    elif tipo == "pico":
+        b = [1 + alfa * A, -2 * c, 1 - alfa * A]
+        a = [1 + alfa / A, -2 * c, 1 - alfa / A]
+    elif tipo == "grave":           # low shelf
+        r = 2 * np.sqrt(A) * alfa
+        b = [A * ((A + 1) - (A - 1) * c + r), 2 * A * ((A - 1) - (A + 1) * c), A * ((A + 1) - (A - 1) * c - r)]
+        a = [(A + 1) + (A - 1) * c + r, -2 * ((A - 1) + (A + 1) * c), (A + 1) + (A - 1) * c - r]
+    else:                           # "agudo": high shelf
+        r = 2 * np.sqrt(A) * alfa
+        b = [A * ((A + 1) + (A - 1) * c + r), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - r)]
+        a = [(A + 1) - (A - 1) * c + r, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - r]
+    return np.array(b + a, np.float64) / a[0]
+
+
+class Polidor:
+    """Deixa a voz do Piper mais encorpada e menos "metalica", pedaco a pedaco, sem estalo nas
+    emendas (o estado dos filtros passa de um pedaco para o outro). Comparado com as vozes reais
+    do banco (14/11), o Piper sai com ~12-24 dB a menos de grave (60-100 Hz), ~5 dB a menos de
+    presenca (2-4,5 kHz) e, na Faber, chiado sobrando em 8-10 kHz. Corrige isso com um EQ e
+    segura os picos com um compressor leve. Custa ~1 ms por segundo de audio."""
+
+    BLOCO = 0.005             # s: o compressor mede o volume a cada 5 ms
+    LIMIAR = 10 ** (-20 / 20)
+    RAZAO = 2.5
+    ATAQUE, SOLTURA = 0.4, 0.06   # quanto o ganho anda por bloco ao baixar / ao voltar
+
+    def __init__(self, sr):
+        from scipy.signal import sosfilt_zi
+        self.sr = sr
+        self.sos = np.stack([
+            _biquad("passa_alta", 55, sr),                    # tira o ronco abaixo da voz
+            _biquad("grave", 140, sr, +4.0, 0.7),             # corpo
+            _biquad("pico", 380, sr, -1.5, 1.0),              # tira o "abafado" que o grave traria
+            _biquad("pico", 2800, sr, +3.0, 0.8),             # presenca: a voz "chega na frente"
+            _biquad("agudo", 7800, sr, -4.0, 0.7),            # chiado metalico do Piper
+        ])
+        self.zi = sosfilt_zi(self.sos) * 0.0
+        self.ganho = 1.0
+        self.resto = np.zeros(0, np.float32)
+
+    def __call__(self, w):
+        from scipy.signal import sosfilt
+        if len(w) == 0:
+            return w
+        y, self.zi = sosfilt(self.sos, np.asarray(w, np.float64), zi=self.zi)
+        y = np.concatenate([self.resto, y.astype(np.float32)])
+        jan = max(1, int(self.sr * self.BLOCO))
+        n = len(y) // jan
+        self.resto = y[n * jan:]
+        if n == 0:
+            return np.zeros(0, np.float32)
+        blocos = y[:n * jan].reshape(n, jan)
+        pico = np.abs(blocos).max(1)
+        alvo = np.where(pico > self.LIMIAR, (self.LIMIAR * (pico / self.LIMIAR) ** (1 / self.RAZAO)) / np.maximum(pico, 1e-9), 1.0)
+        ganhos = np.empty(n + 1, np.float32)
+        ganhos[0] = g = self.ganho
+        for i, a in enumerate(alvo):
+            g += (a - g) * (self.ATAQUE if a < g else self.SOLTURA)
+            ganhos[i + 1] = g
+        self.ganho = g
+        # ganho variando suave dentro de cada bloco (do valor anterior ao novo): sem degrau
+        rampa = np.linspace(0, 1, jan, endpoint=False, dtype=np.float32)
+        g_amostra = ganhos[:-1, None] + (ganhos[1:] - ganhos[:-1])[:, None] * rampa
+        return (blocos * g_amostra).reshape(-1)
+
+    def fim(self):
+        r, self.resto = self.resto * self.ganho, np.zeros(0, np.float32)
+        return r
+
+
 class Nivelador:
     """Deixa todas as vozes no mesmo volume (as do Piper saiam no talo e as online na metade).
     Mede o volume da fala em cada pedaco e ajusta aos poucos, sem "bombear"."""
@@ -199,13 +280,52 @@ class Nivelador:
 
 
 # ----------------------------------------------------------------- banco de vozes
+def prioridade_placa(cfg):
+    """Pede ao Windows prioridade na fila da placa de video (como o OBS faz para nao engasgar a
+    gravacao no meio do jogo). Com um jogo ocupando a placa, em "tempo real" (5) a voz clonada
+    comecou em 385 ms em vez de ~530, com 1 buraco em vez de 5-7 (2 rodadas cada, as 08:30).
+    "alta" (4) nao mudou nada. 0 = nao mexe. Nao precisa de administrador.
+    DESLIGADO por padrao: no RDR2 de verdade a voz saiu sempre, mas o FPS do jogo despencou (a
+    placa estava 93-95% ocupada pelo jogo e a voz passava na frente; 14/11 09:00)."""
+    classe = int(cfg.get("prioridade_placa", 0))
+    if not classe:
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x0200 | 0x0400, False, os.getpid())   # SET_INFORMATION | QUERY_INFORMATION
+        r = ctypes.windll.gdi32.D3DKMTSetProcessSchedulingPriorityClass(h, classe) & 0xFFFFFFFF
+        k32.CloseHandle(h)
+        diag.ev("prioridade_placa", classe=classe, resposta=hex(r))
+        if r:
+            log(f"Não deu para pedir prioridade na placa de vídeo (código {r:#x}).", tipo="aviso")
+    except Exception as e:
+        diag.ev("prioridade_placa", erro=repr(e)[:120])
+
+
+class ClonadaTravou(Exception):
+    def __init__(self, fase, esperou):
+        super().__init__(f"voz clonada sem resposta ({fase}, {esperou:.1f} s)")
+        self.fase, self.esperou = fase, esperou
+
+
 class Banco:
     def __init__(self):
         self.arquivo = os.path.join(BANCO, "banco.json")
         self.vozes = ler_json(self.arquivo, {}) or {}
 
     def da_categoria(self, cat):
-        return sorted(k for k, v in self.vozes.items() if v.get("categoria") == cat)
+        """Vozes que o sorteio pode usar. As "exclusivas" (ex.: Lucia) ficam de fora: so vao para
+        o personagem com o nome delas ou para quem o usuario escolher no painel."""
+        return sorted(k for k, v in self.vozes.items() if v.get("categoria") == cat and not v.get("exclusiva"))
+
+    def do_personagem(self, nome):
+        """Voz exclusiva reservada para este nome de personagem (campo "personagens" do banco.json)."""
+        n = (nome or "").strip().casefold()
+        for k, v in self.vozes.items():
+            if any(n == p.casefold() for p in v.get("personagens", [])):
+                return k
+        return None
 
     def amostras(self, vid):
         pasta = os.path.join(BANCO, vid)
@@ -287,13 +407,44 @@ class MotorClonada:
             torch.set_num_threads(nucleos)
             log(f"Carregando a voz clonada (XTTS v2) no processador ({nucleos} núcleos) — "
                 "sem placa NVIDIA ela demora mais para começar a falar...")
-        from TTS.api import TTS
+        if self.dev == "cuda":
+            prioridade_placa(self.cfg)
+            if self.cfg.get("xtts_sem_cudnn", True):
+                # sem a biblioteca cuDNN: -0,2 GB de RAM e a mesma velocidade (medido as 08:20)
+                torch.backends.cudnn.enabled = False
         self._ler_modelo_mapeado(torch)
         self.torch = torch
-        api = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.dev)
-        self.modelo = api.synthesizer.tts_model
+        api = None
+        self.modelo = self._carregar_na_placa(torch) if self.dev == "cuda" else None
+        if self.modelo is None:
+            from .util import TRAVA_IMPORTACAO
+            with TRAVA_IMPORTACAO:
+                from TTS.api import TTS
+            api = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.dev)
+            self.modelo = api.synthesizer.tts_model
         if self.dev == "cpu":
             self._gpt_8bits(torch)
+        self.meio = False
+        if self.dev == "cuda" and self.cfg.get("xtts_fp16", True):
+            # GPT em meia precisao (fp16): 380 dos 467 milhoes de pesos ficam com metade do tamanho
+            # (~0,7 GB a menos na placa). Com um jogo pesado (RDR2) a placa enchia, o Windows jogava
+            # a voz para a memoria compartilhada e ela caia de 2x para 0,3x do tempo real (7 s de atraso).
+            try:
+                self._transformador_fp16(torch)
+                self.meio = True
+            except Exception as e:
+                log("Não deu para usar meia precisão na voz clonada (segue normal):", repr(e), tipo="aviso")
+        self.rapido = None
+        if self.dev == "cuda" and self.cfg.get("xtts_grafo", True):
+            # passo do GPT gravado como CUDA graph: ~22 ms -> poucos ms por codigo (xtts_rapido.py)
+            try:
+                from .xtts_rapido import GeradorRapido
+                self.rapido = GeradorRapido(self.modelo)
+                log("Voz clonada: gerador rápido ligado (CUDA graph).")
+            except Exception as e:
+                self.rapido = None
+                log("Gerador rápido indisponível (segue no normal):", repr(e)[:160], tipo="aviso")
+        self.leve = False
         # o carregamento deixa ~3 GB de lixo na RAM (copia do arquivo do modelo): libera
         del api
         import gc
@@ -305,16 +456,125 @@ class MotorClonada:
             ctypes_.windll.psapi.EmptyWorkingSet(ctypes_.windll.kernel32.GetCurrentProcess())
         except Exception:
             pass
+        self.stream_ok = True      # as amostras de cada voz sao preparadas na 1a vez que ela fala
+        # aquece (a primeira geracao e lenta)
+        for _ in self.gerar("Pronto.", "narrador", 1.0, 1.0):
+            pass
+        if self.dev == "cuda" and self.cfg.get("xtts_leve", True):
+            # DEPOIS de aquecer: antes disso a RAM nao caia (ficava 3,3 GB em vez de 1,8; 16/11)
+            try:
+                self._tirar_preparo_da_placa(torch)
+                self.leve = True
+                self._limpar_placa()
+            except Exception as e:
+                log("Não deu para deixar a voz clonada mais leve (segue normal):", repr(e), tipo="aviso")
         try:
             import psutil
             log(f"Memória do programa depois de carregar a voz: {psutil.Process().memory_info().rss / 2 ** 30:.1f} GB")
         except Exception:
             pass
-        self.stream_ok = True      # as amostras de cada voz sao preparadas na 1a vez que ela fala
-        # aquece (a primeira geracao e lenta)
-        for _ in self.gerar("Pronto.", "narrador", 1.0, 1.0):
-            pass
         log(f"Voz clonada pronta em {time.time() - t0:.0f}s.", tipo="ok")
+
+    PASTA_XTTS = os.path.expandvars(r"%LOCALAPPDATA%\tts\tts_models--multilingual--multi-dataset--xtts_v2")
+
+    def _carregar_na_placa(self, torch):
+        """Monta o XTTS JA na placa de video e le os pesos mapeados do disco direto para ela. Antes
+        (TTS.api) ele montava tudo na RAM e depois copiava: pico de 6,0 GB de RAM e 25 s; assim o
+        pico e 4,5 GB (a maior parte e o arquivo mapeado, que o Windows solta sem gravar no disco)
+        e carrega em 12 s (medido as 08:20). Sem o modelo baixado ainda -> None (usa o TTS.api, que baixa)."""
+        pasta = self.PASTA_XTTS
+        if not all(os.path.isfile(os.path.join(pasta, f)) for f in ("config.json", "model.pth", "vocab.json")):
+            return None
+        try:
+            from .util import TRAVA_IMPORTACAO
+            with TRAVA_IMPORTACAO:
+                from TTS.tts.configs.xtts_config import XttsConfig
+                from TTS.tts.models.xtts import Xtts
+                import TTS.tts.models.xtts as modulo
+            original = modulo.load_fsspec
+
+            def ler(path, map_location=None, **kw):
+                if os.path.isfile(str(path)):
+                    try:
+                        return torch.load(str(path), map_location="cuda", mmap=True, weights_only=False)
+                    except Exception:
+                        pass
+                return original(path, map_location=map_location, **kw)
+
+            modulo.load_fsspec = ler
+            cfg = XttsConfig()
+            cfg.load_json(os.path.join(pasta, "config.json"))
+            with torch.device("cuda"):
+                m = Xtts.init_from_config(cfg)
+            m.load_checkpoint(cfg, checkpoint_dir=pasta, use_deepspeed=False)
+            m.cuda()
+            m.eval()                  # o eval() do XTTS nao devolve o modelo (retorna None)
+            return m
+        except Exception as e:
+            log("Carga direta na placa falhou, usando o jeito antigo:", repr(e)[:160], tipo="aviso")
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            return None
+
+    def _transformador_fp16(self, torch):
+        """So o transformador do GPT (GPT2, 30 camadas) em fp16; o resto do XTTS segue em fp32. A
+        entrada vira fp16 e a saida volta a fp32 nas bordas dele. (Com torch.autocast a voz TRAVAVA
+        dentro do driver quando o jogo enchia a placa; assim nao travou - medido as 20:20.)"""
+        gpt2 = self.modelo.gpt.gpt
+        gpt2.half()
+        # o XTTS troca a posicao do GPT2 por zeros em fp32 (somados a entrada, voltavam tudo a fp32)
+        dim = gpt2.config.n_embd
+        gpt2.wpe = lambda r: torch.zeros((r.shape[0], r.shape[1], dim), device=r.device, dtype=torch.float16)
+
+        def entrada(_mod, args, kwargs):
+            for k in ("inputs_embeds", "encoder_hidden_states"):
+                v = kwargs.get(k)
+                if v is not None and v.dtype == torch.float32:
+                    kwargs[k] = v.half()
+            return args, kwargs
+
+        def saida(_mod, _args, _kwargs, out):
+            if hasattr(out, "last_hidden_state") and out.last_hidden_state is not None:
+                out.last_hidden_state = out.last_hidden_state.float()
+                if getattr(out, "hidden_states", None) is not None:
+                    out.hidden_states = tuple(h.float() for h in out.hidden_states)
+                return out
+            if isinstance(out, tuple) and out and torch.is_tensor(out[0]):
+                return (out[0].float(),) + tuple(out[1:])
+            return out
+
+        gpt2.register_forward_pre_hook(entrada, with_kwargs=True)
+        gpt2.register_forward_hook(saida, with_kwargs=True)
+
+    def _modulos_preparo(self):
+        """Pecas do XTTS que so servem para preparar a amostra de uma voz NOVA (os latentes de cada
+        voz ficam salvos no disco, em latentes.pt). O text_head so e usado no treino."""
+        m = self.modelo
+        return (m.gpt.conditioning_encoder, m.gpt.conditioning_perceiver,
+                m.hifigan_decoder.speaker_encoder, m.gpt.text_head)
+
+    def _tirar_preparo_da_placa(self, torch):
+        """Deixa na placa so o que fala. Medido (RTX 3060 Ti, 16/11): placa 1,09 -> 0,86 GB usados
+        e o programa 3,3 -> 1,8 GB de RAM, mesma velocidade. Voz nova sem latentes.pt: as pecas
+        voltam para a placa so durante o preparo (latentes())."""
+        m = self.modelo
+        # o XTTS descobre onde roda pelo 1o peso (o conditioning_encoder, que vai para a CPU)
+        m.__class__ = type("XttsLeve", (m.__class__,), {"device": property(lambda s: torch.device("cuda"))})
+        for mod in self._modulos_preparo():
+            mod.to("cpu")
+
+    def _limpar_placa(self):
+        """O PyTorch guarda para si a memoria da placa que a fala usou e nao devolve: depois de 3
+        falas ficava 2,0 GB reservado para 0,9 GB em uso. Devolvendo no fim de cada fala fica 1,2 GB,
+        sem perder velocidade (medido 16/11). Com o jogo enchendo a placa, e isso que evita o
+        Windows jogar a voz para a memoria compartilhada (lenta)."""
+        if self.dev == "cuda" and self.cfg.get("xtts_devolver_placa", True):
+            try:
+                self.torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     def _gpt_8bits(self, torch):
         """Sem placa de video, 77% do tempo da voz e o GPT gerando codigo a codigo, e a cada codigo
@@ -378,11 +638,14 @@ class MotorClonada:
         toks = torch.IntTensor(m.tokenizer.encode(texto.strip().lower(), lang=lang.split("-")[0])).unsqueeze(0).to(m.device)
         falsos = m.gpt.compute_embeddings(gpt.to(m.device), toks)
         am = self.AMOSTRAGEM
-        gerador = m.gpt.get_generator(
-            fake_inputs=falsos, top_k=am["top_k"], top_p=am["top_p"], temperature=am["temperature"],
-            do_sample=True, num_beams=1, num_return_sequences=1, length_penalty=1.0,
-            repetition_penalty=float(am["repetition_penalty"]), output_attentions=False,
-            output_hidden_states=True, return_dict_in_generate=True)
+        if self.rapido is not None:
+            gerador = self.rapido.gerar(m.gpt.gpt_inference.cached_prefix_emb, **am)
+        else:
+            gerador = m.gpt.get_generator(
+                fake_inputs=falsos, top_k=am["top_k"], top_p=am["top_p"], temperature=am["temperature"],
+                do_sample=True, num_beams=1, num_return_sequences=1, length_penalty=1.0,
+                repetition_penalty=float(am["repetition_penalty"]), output_attentions=False,
+                output_hidden_states=True, return_dict_in_generate=True)
         plano = list(self.cfg.get("xtts_pedacos") or [8, 24])    # tamanho de cada pedaco (o ultimo se repete)
         n_ped = 0
         novos, todos, ant, sob, fim, alvo = [], [], None, None, False, plano[0]
@@ -390,7 +653,7 @@ class MotorClonada:
             try:
                 x, lat = next(gerador)
                 novos.append(x)
-                todos.append(lat)
+                todos.append(lat.float())
             except StopIteration:
                 fim = True
             if todos and (fim or len(novos) >= alvo):
@@ -422,7 +685,16 @@ class MotorClonada:
             pass
         if lat is None:
             with self.trava:
-                lat = self.modelo.get_conditioning_latents(audio_path=wavs, gpt_cond_len=30, max_ref_length=60)
+                if getattr(self, "leve", False):
+                    for mod in self._modulos_preparo():
+                        mod.to("cuda")
+                try:
+                    lat = self.modelo.get_conditioning_latents(audio_path=wavs, gpt_cond_len=30, max_ref_length=60)
+                finally:
+                    if getattr(self, "leve", False):
+                        for mod in self._modulos_preparo():
+                            mod.to("cpu")
+                        self._limpar_placa()
             try:
                 torch.save({"assin": assin, "gpt": lat[0], "spk": lat[1]}, cache)
             except Exception:
@@ -484,7 +756,13 @@ class MotorClonada:
 
     def gerar(self, texto, vid, tom, vel):
         """-> pedacos (wav float32, sr, pausa_depois). Comeca a devolver antes de terminar."""
-        lat = self.latentes(vid) or self.latentes("narrador")
+        try:
+            yield from self._gerar(texto, vid, tom, vel)
+        finally:
+            self._limpar_placa()
+
+    def _gerar(self, texto, vid, tom, vel):
+        lat =self.latentes(vid) or self.latentes("narrador")
         if lat is None:
             raise RuntimeError(f"voz {vid} sem amostra")
         gpt, spk = lat
@@ -543,6 +821,107 @@ class MotorClonada:
 
 
 # ----------------------------------------------------------------- motor rapido (Piper + Edge)
+class Baixada:
+    """Audio de UMA frase da voz online, chegando aos poucos: quem baixa chama receber() com os
+    bytes do MP3 que ja chegaram; quem toca le os pedacos prontos com ler() enquanto o resto chega.
+    Decodificar o MP3 pela metade da exatamente o mesmo som (testado 14/11), deixando as 2 ultimas
+    janelas (96 ms) para a proxima vez. Corta o silencio do comeco (110-165 ms) e do fim (270-800 ms)
+    que a Microsoft poe em toda frase; as pausas do meio (virgulas) ficam."""
+    MARGEM = 2304                  # amostras (2 janelas do MP3) que ainda podem mudar
+    LIM = 0.008                    # abaixo disso e silencio
+    MIN_PEDACO = 0.18              # s: entrega pedacos de pelo menos isso (menos vai-e-vem)
+
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.partes = []
+        self.sr = 24000
+        self.fim = False
+        self.erro = None
+        self._feito = 0            # posicao no audio decodificado ate onde ja foi entregue/descartado
+        self._comecou = False      # ja passou do silencio do comeco
+
+    @classmethod
+    def pronta(cls, w, sr):
+        b = cls()
+        b.partes, b.sr, b.fim = ([w] if len(w) else []), sr, True
+        return b
+
+    def receber(self, dados, fim=False):
+        import soundfile as sf
+        try:
+            w, sr = sf.read(io.BytesIO(bytes(dados)), dtype="float32")
+        except Exception:
+            if fim:
+                raise
+            return
+        w = w.mean(1) if w.ndim > 1 else w
+        self.sr = sr
+        ate = len(w) if fim else len(w) - self.MARGEM
+        if ate <= self._feito:
+            if fim:
+                self._entregar([], fim=True)
+            return
+        seg = w[self._feito:ate]
+        if not self._comecou:
+            alto = np.flatnonzero(np.abs(seg) > self.LIM)
+            if not len(alto):
+                self._feito = max(self._feito, ate - int(sr * 0.03))
+                if fim:
+                    self._entregar([], fim=True)
+                return
+            ini = max(0, int(alto[0]) - int(sr * 0.03))
+            seg = seg[ini:]
+            self._feito += ini
+            self._comecou = True
+        alto = np.flatnonzero(np.abs(seg) > self.LIM)
+        corte = min(len(seg), int(alto[-1]) + int(sr * 0.06)) if len(alto) else 0
+        if fim:
+            self._feito = ate
+            self._entregar([np.ascontiguousarray(seg[:corte], np.float32)] if corte else [], fim=True)
+            return
+        if corte / sr < self.MIN_PEDACO:
+            return                          # pouco som ainda: espera juntar mais
+        self._feito += corte
+        self._entregar([np.ascontiguousarray(seg[:corte], np.float32)])
+
+    def _entregar(self, ws, fim=False):
+        with self.cond:
+            self.partes += ws
+            self.fim = self.fim or fim
+            self.cond.notify_all()
+
+    def falhar(self, e):
+        with self.cond:
+            self.erro = e
+            self.fim = True
+            self.cond.notify_all()
+
+    def esperar(self, timeout):
+        with self.cond:
+            self.cond.wait_for(lambda: self.fim, timeout)
+            return self.fim
+
+    def ler(self, timeout=6.0):
+        i = 0
+        while True:
+            with self.cond:
+                self.cond.wait_for(lambda: i < len(self.partes) or self.fim, timeout)
+                if i < len(self.partes):
+                    w = self.partes[i]
+                elif self.erro is not None:
+                    raise RuntimeError("a voz online não respondeu: " + repr(self.erro)[:60])
+                elif self.fim:
+                    return
+                else:
+                    raise RuntimeError("a voz online parou no meio")
+            i += 1
+            yield w
+
+    def tudo(self):
+        with self.cond:
+            return np.concatenate(self.partes) if self.partes else np.zeros(0, np.float32)
+
+
 class MotorRapida:
     nome = "rapida"
 
@@ -550,21 +929,35 @@ class MotorRapida:
         self.cfg = cfg
         self.banco = banco
         self.piper = {}
+        self.kokoro = None
         self.trava = threading.Lock()
         self.cache_edge = collections.OrderedDict()
+        self._em_voo = {}                       # (voz, taxa, frase) -> Future do pedido em andamento
+        self._edge_falhas, self._edge_ruim_ate, self._edge_sonda = 0, 0.0, 0.0
+        self._exec = None
         self.pronta = threading.Event()        # vozes locais carregadas e aquecidas
         threading.Thread(target=self._precarregar, daemon=True).start()
+        self.acordar_vozes()
 
     def _precarregar(self):
         """Carrega as vozes locais logo ao abrir e ja fala um "oi" mudo com cada uma: a 1a fala de
         verdade levava 4,4 s (medido as 03:58: a voz ainda nao tinha carregado e nem aquecido)."""
         from piper.config import SynthesisConfig
         t0 = time.time()
-        for v in sorted({(d.get("rapida") or {}).get("voz") for d in self.banco.vozes.values()} - {None}):
+        usadas = set()
+        for d in self.banco.vozes.values():
+            r = d.get("rapida") or {}
+            usadas |= {r.get("voz"), (r.get("reserva") or {}).get("voz")}
+        for v in sorted(usadas - {None}):
             if v.startswith("pt_BR-"):
                 try:
                     for _ in self._voz_piper(v).synthesize("Oi, tudo bem?", SynthesisConfig()):
                         pass
+                except Exception as e:
+                    log(f"Voz {v} não carregou: {e!r}", tipo="aviso")
+            elif v.startswith(KOKORO):
+                try:
+                    self._kokoro().create("Oi, tudo bem?", voice=v[len(KOKORO):], lang="pt-br")
                 except Exception as e:
                     log(f"Voz {v} não carregou: {e!r}", tipo="aviso")
         diag.ev("rapida_pronta", ms=round((time.time() - t0) * 1000))
@@ -594,19 +987,190 @@ class MotorRapida:
                 self.piper[nome] = v
         return self.piper[nome]
 
+    def _kokoro(self):
+        """Kokoro (82M, int8): vozes mais naturais que o Piper, mas ~5x mais lento (medido 14/11:
+        ~0,45 s por pedaco curto, 2,7x mais rapido que a fala com 4 nucleos; +150 MB de memoria).
+        Um so modelo serve as 3 vozes brasileiras (pf_dora, pm_alex, pm_santa)."""
+        if self.kokoro is None:
+            with self.trava:
+                if self.kokoro is None:
+                    import onnxruntime as ort
+                    from kokoro_onnx import Kokoro
+                    so = ort.SessionOptions()
+                    so.intra_op_num_threads = int(self.cfg.get("kokoro_nucleos", 4))
+                    so.inter_op_num_threads = 1
+                    sess = ort.InferenceSession(os.path.join(KOKORO_DIR, "kokoro-v1.0.int8.onnx"),
+                                                sess_options=so, providers=["CPUExecutionProvider"])
+                    self.kokoro = Kokoro.from_session(sess, os.path.join(KOKORO_DIR, "voices-v1.0.bin"))
+        return self.kokoro
+
+    @staticmethod
+    def _pedacos_kokoro(frase, max_palavras=7):
+        """O Kokoro gera o pedaco inteiro antes de soltar o 1o som: pedaco curto = fala comeca
+        antes. Quebra nas virgulas e, se ainda ficar comprido, a cada ~max_palavras palavras."""
+        out = []
+        for parte in re.split(r"(?<=[,;:])\s+", frase):
+            p = parte.split()
+            n = max(1, -(-len(p) // max_palavras))           # quantos pedacos
+            tam = -(-len(p) // n)
+            out += [" ".join(p[i:i + tam]) for i in range(0, len(p), tam)]
+        return [o for o in out if re.search(r"\w", o)]
+
+    def _gerar_kokoro(self, texto, voz, tom, vel):
+        k = self._kokoro()
+        nome = voz[len(KOKORO):]
+        primeiro = True
+        for frase in dividir_frases(texto):
+            if not re.search(r"\w", frase):
+                continue
+            ritmo = 0.92 if frase.endswith("...") else 1.07 if frase.endswith("!") else 1.0
+            ream = Reamostrador(tom)
+            pedacos = self._pedacos_kokoro(frase)
+            if primeiro and len(pedacos[0].split()) > 5:
+                # 1o pedaco da fala bem curto: a voz comeca antes e o resto e gerado enquanto ela fala
+                p = pedacos[0].split()
+                pedacos[:1] = [" ".join(p[:4]), " ".join(p[4:])]
+            primeiro = False
+            for i, p in enumerate(pedacos):
+                w, sr = k.create(p, voice=nome, speed=max(0.5, min(2.0, vel * ritmo / tom)), lang="pt-br")
+                w = aparar(np.asarray(w, np.float32), sr, antes=0.01, depois=0.03)
+                ultimo = i == len(pedacos) - 1
+                yield ream(w), sr, pausa_apos(frase) if ultimo else (0.12 if p.endswith((",", ";", ":")) else 0.03)
+
     def _gerar_piper(self, texto, voz, tom, vel):
+        if voz.startswith(KOKORO):
+            yield from self._gerar_kokoro(texto, voz, tom, vel)
+            return
         from piper.config import SynthesisConfig
         v = self._voz_piper(voz)
         base = v.config.length_scale or 1.0
+        polir = self.cfg.get("polir_local", True)
+        pol = None                            # um so para a fala toda: o EQ nao "reinicia" a cada frase
         for frase in dividir_frases(texto):
             if not re.search(r"\w", frase):
                 continue
             ritmo = 0.92 if frase.endswith("...") else 1.07 if frase.endswith("!") else 1.0
             sc = SynthesisConfig(length_scale=base / (vel * ritmo) * tom, noise_scale=0.75, noise_w_scale=0.9)
             ream = Reamostrador(tom)
+            ant = None                        # segura 1 pedaco para emendar o resto do polidor no ultimo
             for ch in v.synthesize(frase, sc):
-                w = np.asarray(ch.audio_float_array, dtype=np.float32).reshape(-1)
-                yield ream(w), ch.sample_rate, pausa_apos(frase)
+                w = ream(np.asarray(ch.audio_float_array, dtype=np.float32).reshape(-1))
+                if polir:
+                    pol = pol or Polidor(ch.sample_rate)
+                    w = pol(w)
+                if ant is not None:
+                    yield ant[0], ant[1], 0.0
+                ant = (w, ch.sample_rate)
+            if ant is not None:
+                w = np.concatenate([ant[0], pol.fim()]) if pol else ant[0]
+                yield w, ant[1], pausa_apos(frase)
+
+    async def _corrida(self, frase, voz, taxa, baixada):
+        """Baixa a frase e vai entregando o audio para `baixada` CONFORME CHEGA (o 1o som chega em
+        ~0,8 s; a frase inteira em ~1,05 s; antes esperava a frase inteira).
+        Se o 1o som nao chegar em `edge_reforco_s` (1,25 s), faz mais um pedido igual e fica com o
+        que comecar primeiro (a Microsoft as vezes empaca 2-10 s). Sem som em `edge_limite_s` (3 s),
+        ou se o som parar no meio por 2 s -> erro (o programa usa a voz local de reserva)."""
+        import asyncio
+        reforco = float(self.cfg.get("edge_reforco_s", 1.25))
+        t0 = time.time()
+        limite = t0 + float(self.cfg.get("edge_limite_s", 3.0))
+        maximo = int(self.cfg.get("edge_pedidos_max", 2))
+        pedidos = []
+        feitos = 0
+
+        async def um_pedido(q):
+            import edge_tts
+            try:
+                async for ch in edge_tts.Communicate(frase, voz, rate=taxa).stream():
+                    if ch["type"] == "audio" and ch["data"]:
+                        await q.put(ch["data"])
+            except Exception as e:
+                await q.put(e)
+            await q.put(None)
+
+        def novo_pedido():
+            q = asyncio.Queue()
+            pedidos.append((asyncio.ensure_future(um_pedido(q)), q))
+
+        novo_pedido()
+        feitos = 1
+        ok, primeiro_ms = False, None
+        try:
+            vencedor = None
+            while vencedor is None:
+                agora = time.time()
+                if agora >= limite or not pedidos:
+                    raise RuntimeError("a voz online não respondeu")
+                prox = t0 + reforco * feitos if feitos < maximo else limite
+                gets = {asyncio.ensure_future(q.get()): (t, q) for t, q in pedidos}
+                prontos, resto = await asyncio.wait(gets, timeout=max(0.01, min(prox, limite) - agora),
+                                                    return_when=asyncio.FIRST_COMPLETED)
+                for g in resto:
+                    g.cancel()
+                for g in prontos:
+                    item = g.result()
+                    t, q = gets[g]
+                    if isinstance(item, (bytes, bytearray)):
+                        if vencedor is None:
+                            vencedor = (t, q, item)
+                        else:
+                            q.put_nowait(item)
+                    elif (t, q) in pedidos:
+                        pedidos.remove((t, q))           # esse pedido acabou sem som (erro)
+                if vencedor is None and feitos < maximo and time.time() >= prox:
+                    novo_pedido()
+                    feitos += 1
+            t_v, q_v, item = vencedor
+            for t, q in pedidos:
+                if t is not t_v:
+                    t.cancel()
+            primeiro_ms = round((time.time() - t0) * 1000)
+            dados = bytearray(item)
+            baixada.receber(dados)
+            while True:
+                item = await asyncio.wait_for(q_v.get(), 2.0)
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                dados += item
+                baixada.receber(dados)
+            baixada.receber(dados, fim=True)
+            ok = True
+            return bytes(dados)
+        finally:
+            for t, q in pedidos:
+                t.cancel()
+            diag.ev("edge", ms=round((time.time() - t0) * 1000), primeiro_ms=primeiro_ms, pedidos=feitos,
+                    ok=ok, letras=len(frase), voz=voz.split("-")[2][:8] if voz.count("-") >= 2 else voz)
+
+    def acordar_vozes(self):
+        """A 1a frase de cada voz da Microsoft numa sessao demora mais (1,8-7 s; depois ~1 s).
+        Pede uma palavra com cada voz usada, em segundo plano, ao abrir e a cada 5 minutos."""
+        import asyncio
+        vozes = sorted({(d.get("rapida") or {}).get("voz") for d in self.banco.vozes.values()
+                        if (d.get("rapida") or {}).get("motor") == "edge"} - {None})
+
+        async def todas():
+            await asyncio.gather(*(asyncio.wait_for(self._baixar("Oi.", v, "+0%"), 8) for v in vozes),
+                                 return_exceptions=True)
+
+        def laco():
+            while True:
+                t0 = time.time()
+                if self.so_local():
+                    time.sleep(5)
+                    continue
+                try:
+                    asyncio.run(todas())
+                    diag.ev("vozes_acordadas", n=len(vozes), ms=round((time.time() - t0) * 1000))
+                except Exception:
+                    pass
+                time.sleep(float(self.cfg.get("edge_acordar_s", 300)))
+
+        if vozes and self.cfg.get("edge_acordar", True):
+            threading.Thread(target=laco, daemon=True, name="acordar_vozes").start()
 
     async def _baixar(self, frase, voz, taxa):
         import edge_tts
@@ -616,55 +1180,155 @@ class MotorRapida:
                 dados += ch["data"]
         return bytes(dados)
 
-    def _gerar_edge(self, texto, voz, tom, vel):
+    @staticmethod
+    def _taxa(vel, tom):
+        return f"{round((vel / tom - 1) * 100):+d}%"
+
+    def _futura(self, frase, voz, taxa):
+        """Baixada da frase (voz, taxa): ja pronta (cache), ja sendo baixada (a antecipada: quem chega
+        depois le o que ja veio e o resto conforme chega) ou comeca a baixar agora."""
         from concurrent.futures import ThreadPoolExecutor
-        taxa = f"{round((vel / tom - 1) * 100):+d}%"
+        chave = (voz, taxa, frase)
+        with self.trava:
+            par = self.cache_edge.get(chave)
+            if par is not None:
+                return Baixada.pronta(*par)
+            b = self._em_voo.get(chave)
+            if b is not None and b.erro is None:
+                return b
+            if self._exec is None:
+                self._exec = ThreadPoolExecutor(max_workers=8, thread_name_prefix="edge")
+            b = Baixada()
+            self._em_voo[chave] = b
+            if len(self._em_voo) > 200:
+                for k in [k for k, v in self._em_voo.items() if v.fim][:100]:
+                    self._em_voo.pop(k, None)
+            self._exec.submit(self._baixar_frase, frase, voz, taxa, b)
+            return b
+
+    def _edge_fora(self):
+        return time.time() < self._edge_ruim_ate
+
+    def _edge_ok(self):
+        if self._edge_falhas >= 2 or self._edge_ruim_ate:
+            log("✅ A voz online voltou.", tipo="ok")
+            diag.ev("edge_voltou")
+        self._edge_falhas, self._edge_ruim_ate = 0, 0.0
+
+    def _edge_falhou(self, e):
+        self._edge_falhas += 1
+        if self._edge_falhas >= 2 and not self._edge_fora():
+            self._edge_ruim_ate = time.time() + float(self.cfg.get("edge_pausa_s", 20))
+            log("⚠ A voz online (Microsoft) não está respondendo: usando as vozes locais até ela voltar.",
+                tipo="aviso")
+            diag.ev("edge_fora", falhas=self._edge_falhas)
+        elif self._edge_falhas < 2:
+            log("Voz online (Edge) falhou, usando a local:", repr(e)[:80], tipo="aviso")
+
+    def _sondar_edge(self, texto, voz, taxa):
+        if time.time() - self._edge_sonda < 5:
+            return
+        self._edge_sonda = time.time()
+        frase = (dividir_frases(texto) or [texto])[0]
+        b = self._futura(frase, voz, taxa)
+
+        def ver():
+            if b.esperar(10) and b.erro is None:
+                self._edge_ok()
+            else:
+                self._edge_ruim_ate = max(self._edge_ruim_ate, time.time() + 5)
+        threading.Thread(target=ver, daemon=True).start()
+
+    def antecipar(self, texto, vid, tom, vel):
+        """Ja pede a fala na voz `vid` (sem esperar), para quando ela for gerada de verdade ja estar
+        pronta. Usado enquanto a escuta ainda decide se e voz de homem ou de mulher."""
+        d = self.banco.vozes.get(vid) or {}
+        r = d.get("rapida") or {}
+        if r.get("motor") != "edge" or self._edge_fora() or self.so_local():
+            return
+        tom_total = float(r.get("tom", 1.0)) * tom
+        vel_total = float(r.get("velocidade", 1.0)) * vel
+        taxa = self._taxa(vel_total, tom_total)
+        for f in dividir_frases(texto):
+            self._futura(f, r["voz"], taxa)
+
+    def _gerar_edge(self, texto, voz, tom, vel):
+        taxa = self._taxa(vel, tom)
         frases = dividir_frases(texto)
         # todas as frases sao pedidas juntas: a 2a ja chegou quando a 1a termina de tocar
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            futuros = [ex.submit(self._baixar_frase, f, voz, taxa) for f in frases]
-            for frase, fut in zip(frases, futuros):
-                par = fut.result()
-                yield Reamostrador(tom)(par[0].copy()), par[1], pausa_apos(frase)
+        baixadas = [self._futura(f, voz, taxa) for f in frases]
+        for frase, bx in zip(frases, baixadas):
+            ream = Reamostrador(tom)
+            ant = None
+            for w in bx.ler():
+                if ant is not None:
+                    yield ream(ant), bx.sr, 0.0
+                ant = w
+            if ant is not None:
+                yield ream(ant), bx.sr, pausa_apos(frase)
 
-    def _baixar_frase(self, frase, voz, taxa):
+    def _baixar_frase(self, frase, voz, taxa, baixada):
         import asyncio
-        import soundfile as sf
-        if True:
-            chave = (voz, taxa, frase)
-            par = self.cache_edge.get(chave)
-            if par is None:
-                mp3 = None
-                for limite in (6, 10):          # sem limite, uma falha da internet deixava o narrador mudo
-                    try:
-                        mp3 = asyncio.run(asyncio.wait_for(self._baixar(frase, voz, taxa), limite))
-                        if mp3:
-                            break
-                    except Exception:
-                        mp3 = None
-                if not mp3:
-                    raise RuntimeError("a voz online não respondeu")
-                w, sr = sf.read(io.BytesIO(mp3), dtype="float32")
-                par = (w.mean(1) if w.ndim > 1 else w, sr)
-                self.cache_edge[chave] = par
+        try:
+            asyncio.run(self._corrida(frase, voz, taxa, baixada))
+            w = baixada.tudo()
+            with self.trava:
+                self.cache_edge[(voz, taxa, frase)] = (w, baixada.sr)
                 while len(self.cache_edge) > 300:
                     self.cache_edge.popitem(last=False)
-            return par
+        except BaseException as e:
+            baixada.falhar(e)
 
     def gerar(self, texto, vid, tom, vel):
         d = self.banco.vozes.get(vid) or self.banco.vozes.get("narrador") or {}
         r = d.get("rapida") or {"motor": "piper", "voz": "pt_BR-faber-medium"}
         tom_total = float(r.get("tom", 1.0)) * tom
         vel_total = float(r.get("velocidade", 1.0)) * vel
-        if r.get("motor") == "edge":
-            try:
-                yield from self._gerar_edge(texto, r["voz"], tom_total, vel_total)
-                return
-            except Exception as e:
-                log("Voz online (Edge) falhou, usando a local:", repr(e), tipo="aviso")
-                r = {"voz": "pt_BR-faber-medium"}
-                tom_total *= 1.2
-        yield from self._gerar_piper(texto, r["voz"], tom_total, vel_total)
+        if r.get("motor") == "edge" and self.so_local():
+            r = r.get("reserva") or {"voz": "pt_BR-faber-medium", "tom": 1.2}
+            tom_total = float(r.get("tom", 1.0)) * tom
+            vel_total = float(r.get("velocidade", 1.0)) * vel
+        elif r.get("motor") == "edge":
+            usar_reserva = self._edge_fora()
+            if usar_reserva:
+                self._sondar_edge(texto, r["voz"], self._taxa(vel_total, tom_total))
+            else:
+                ok = False
+                try:
+                    for p in self._gerar_edge(texto, r["voz"], tom_total, vel_total):
+                        ok = True
+                        yield p
+                    self._edge_ok()
+                    return
+                except Exception as e:
+                    self._edge_falhou(e)
+                    if ok:            # ja tinha comecado a falar: nao repete o comeco na outra voz
+                        return
+                    usar_reserva = True
+            # cada personagem tem a sua voz local de reserva (homem na Cadu, mulher na Faber
+            # mais aguda...); antes todo mundo ia para a Faber com o tom 20% mais alto
+            res = r.get("reserva") or {"voz": "pt_BR-faber-medium", "tom": 1.2}
+            tom_total = float(res.get("tom", 1.0)) * tom
+            vel_total = float(res.get("velocidade", 1.0)) * vel
+            r = res
+        yield from self._piper_seguro(texto, r["voz"], tom_total, vel_total)
+
+    def so_local(self):
+        return self.cfg.get("motor") == "local"
+
+    def _piper_seguro(self, texto, voz, tom, vel):
+        """Voz local que nunca deixa a fala muda: se a voz do personagem falhar antes de comecar a
+        falar (modelo faltando/corrompido), fala na Faber, que vem sempre com o programa."""
+        ok = False
+        try:
+            for p in self._gerar_piper(texto, voz, tom, vel):
+                ok = True
+                yield p
+        except Exception as e:
+            if ok or voz == "pt_BR-faber-medium":
+                raise
+            log(f"Voz local {voz} falhou, usando a Faber:", repr(e)[:80], tipo="aviso")
+            yield from self._gerar_piper(texto, "pt_BR-faber-medium", tom, vel)
 
 
 # ----------------------------------------------------------------- narrador (fila -> som)
@@ -702,14 +1366,27 @@ class Narrador:
         # escolhe a voz NA HORA de gerar (o nucleo ouve a voz original do jogo e decide se e homem
         # ou mulher): fn(pag, texto, voz, tom, vel, quem, cat, visto) -> (voz, tom, vel, quem, cat) ou None
         self.resolver_voz = None
+        self.trava_resolver = threading.Lock()
+        # fn(texto, voz, tom, vel, quem, cat) -> [(voz, tom, vel), ...] vozes que a fala PODE ter
+        # (o nucleo diz: "Homem (pela voz)", "Mulher (pela voz)"...); a rapida ja as pede antes
+        self.candidatas_voz = None   # escuta/elenco: uma fala por vez decide a voz
+        self.clonada_lenta = False   # a clonada travou: usando a rapida ate ela voltar
+        self._clonada_thread = None
+        self._clonada_abandonada = False
+        self.saida_id = None      # saida de som padrao do Windows (muda quando conecta um fone)
+        self.saida_nome = ""
+        self.saida_trocou = None  # nome do aparelho novo -> o _tocar reabre o audio nele
         threading.Thread(target=self._sintetizar, daemon=True).start()
         threading.Thread(target=self._tocar, daemon=True).start()
+        threading.Thread(target=self._vigiar_saida, daemon=True, name="saida").start()
 
-    def ligar_clonada(self, antes=None):
+    def ligar_clonada(self, antes=None, avisar=True):
         if self.clonada or self.estado_clonada == "carregando":
             return
         from .util import cabe
-        if not cabe("a voz clonada", ram_gb=3.5, vram_gb=3.0, contar_paginacao=True):
+        # na placa de video o GPT vai em fp16 (xtts_fp16): ocupa ~1,3 GB (antes 2,3 GB) e os pesos
+        # nao ficam na RAM. Pedir 3,5 GB de RAM e 3 GB na placa impedia de carregar com o jogo aberto.
+        if not cabe("a voz clonada", ram_gb=2.5, vram_gb=2.0, contar_paginacao=True, avisar=avisar):
             # nao muda self.cfg["motor"]: motor_atual() ja usa a rapida enquanto a clonada nao
             # carrega. Antes trocava para "rapida" e, ao mexer em qualquer ajuste no painel, isso era
             # SALVO no config.json e a voz clonada nunca mais carregava sozinha.
@@ -742,6 +1419,20 @@ class Narrador:
             return self.clonada
         return self.rapida
 
+    def _voz_unica(self, voz, tom, vel):
+        """Botao "Voz da Lucia" / "Voz do Jason" ligado: todo mundo fala com essa voz, sem variacao
+        de tom. config "voz_unica" = id da voz no banco ("lucia", "jason") ou "" (desligado).
+        "dupla" (botao "Lucia + Jason"): voz de mulher/menina/idosa vira Lucia; o resto (homem,
+        menino, idoso e o narrador) vira Jason.
+        "so_lucia" e o nome antigo da opcao (so a Lucia)."""
+        vid = self.cfg.get("voz_unica") or ("lucia" if self.cfg.get("so_lucia") else "")
+        if vid == "dupla":
+            cat = self.banco.vozes.get(voz, {}).get("categoria")
+            vid = "lucia" if cat in ("mulher", "menina", "idosa") else "jason"
+        if vid and vid in self.banco.vozes:
+            return vid, 1.0, 1.0
+        return voz, tom, vel
+
     def falar(self, texto, voz, tom=1.0, vel=1.0, quem="", categoria="", nova=True, visto=None, forcar=False):
         """nova=True: comecou uma fala/legenda nova.
 
@@ -749,6 +1440,7 @@ class Narrador:
         velocidade normal. Se ficar 2 falas atras, a mais velha e pulada (nao acumula atraso).
         Com "interromper_ao_avancar": corta a anterior na hora (jeito antigo)."""
         self.seq += 1
+        voz, tom, vel = self._voz_unica(voz, tom, vel)
         diag.ev("fala", id=self.seq, texto=texto, voz=voz, quem=quem, nova=nova,
                 espera_ms=round((time.time() - (visto or time.time())) * 1000))
         if nova:
@@ -802,12 +1494,23 @@ class Narrador:
         """Velocidade de reproducao. Acelera SO se estiver atrasado de verdade: a proxima fala
         ja espera ha mais de 0,4 s E ainda falta mais de 0,7 s desta. Quanto mais a proxima
         espera, mais acelera (ate "acelerar_ate"). Fala curta ou quase no fim: termina normal."""
-        if pag >= self.pag or restante < 0.7:
+        if pag >= self.pag or restante < 0.5:
             return 1.0
         espera = time.time() - self.chegada.get(pag + 1, time.time())
-        if espera < 0.4:
+        if espera < 0.2:
             return 1.0
-        return min(float(self.cfg.get("acelerar_ate", 1.35)), 1.0 + (espera - 0.4) * 0.25)
+        # reage mais rapido: antes so comecava com 0,4 s de espera e levava ~2 s para chegar no
+        # maximo; a fila entre falas era a maior parte do atraso que sobrou (bateria 14/11)
+        return min(float(self.cfg.get("acelerar_ate", 1.35)), 1.1 + (espera - 0.2) * 0.35)
+
+    def _ritmo_inicial(self, pag, info, dur):
+        """Fala que ja COMECA atrasada (esperou a anterior terminar): ja sai um pouco mais rapida,
+        em vez de comecar normal e so acelerar quando a proxima chegar."""
+        if not info or not info.get("visto") or dur < 0.6:
+            return 1.0
+        atraso = time.time() - info["visto"]
+        r = 1.0 if atraso < 1.3 else 1.0 + (atraso - 1.3) * 0.2
+        return min(float(self.cfg.get("acelerar_ate", 1.35)), max(r, self._ritmo(pag, dur)))
 
     def _repetido(self, texto):
         agora = time.time()
@@ -832,41 +1535,123 @@ class Narrador:
         return p
 
     def _sintetizar(self):
+        """Pega as falas da fila. Na voz rapida, GERA AS PROXIMAS AO MESMO TEMPO que a atual (ate
+        `falas_em_paralelo`), e entrega o som na ordem. Antes era uma de cada vez: com o jogo, a voz
+        da Microsoft levava 2-4 s por fala, as falas chegavam a cada ~2,5 s e o atraso foi crescendo
+        ate 10 s, com falas puladas (sessao de 14/11 10:15; na bateria: mediana 4 s, 6 nao tocaram)."""
         while True:
-            ger, pag, texto, voz, tom, vel, quem, cat, visto, forcar, fid = self.fila.get()
+            item = self.fila.get()
+            if not self._paralelo():
+                self._processar(item, self.audio.put)
+                continue
+            pend = collections.deque([self._iniciar_tarefa(item)])
+            while pend:
+                tarefa = pend[0]
+                while True:
+                    # enquanto espera a fala da vez, ja comeca a gerar as que chegaram depois
+                    while len(pend) < int(self.cfg.get("falas_em_paralelo", 3)):
+                        try:
+                            pend.append(self._iniciar_tarefa(self.fila.get_nowait()))
+                        except queue.Empty:
+                            break
+                    try:
+                        x = tarefa.get(timeout=0.02)
+                    except queue.Empty:
+                        continue
+                    if x is None:
+                        break
+                    self.audio.put(x)
+                pend.popleft()
+
+    def previa(self, texto, voz="narrador", tom=1.0, vel=1.0, quem="", cat=""):
+        """Ja pede a fala a voz online nas vozes que ela pode ter, SEM falar: quando ela for falada
+        de verdade (mesmo texto), o som ja esta chegando. O nucleo chama na 1a leitura da legenda,
+        antes dos ~0,2 s que o leitor espera para ter certeza do texto."""
+        if not self._paralelo():
+            return
+        try:
+            cands = (self.candidatas_voz(texto, voz, tom, vel, quem, cat) if self.candidatas_voz
+                     else [(voz, tom, vel)])
+            if self.cfg.get("voz_unica") or self.cfg.get("so_lucia"):
+                # cada voz possivel vira Lucia/Jason (no "Lucia + Jason" podem ficar as duas)
+                cands = list(dict.fromkeys(self._voz_unica(*c) for c in cands))
+            for cv, ct, cvel in cands:
+                dc = self.banco.vozes.get(cv, {})
+                self.rapida.antecipar(preparar_fala(texto), cv, ct * float(dc.get("tom", 1.0)),
+                                      cvel * float(dc.get("velocidade", 1.0)) * float(self.cfg.get("velocidade", 1.0)))
+        except Exception as e:
+            diag.ev("antecipar_erro", erro=repr(e)[:160])
+
+    def _paralelo(self):
+        return (self.cfg.get("gerar_em_paralelo", True) and self.motor_atual() is self.rapida)
+
+    def _iniciar_tarefa(self, item):
+        q = queue.Queue()
+
+        def trabalhar():
+            try:
+                self._processar(item, q.put)
+            except Exception as e:
+                diag.ev("tarefa_erro", erro=repr(e)[:160])
+            finally:
+                q.put(None)
+
+        threading.Thread(target=trabalhar, daemon=True, name="gerar").start()
+        return q
+
+    def _processar(self, item, saida):
+        if True:
+            ger, pag, texto, voz, tom, vel, quem, cat, visto, forcar, fid = item
             if self._velha(ger, pag):
                 diag.ev("descartada", id=fid, motivo="ficou para trás antes de gerar")
-                continue
+                return
             if not forcar and self._repetido(texto):
                 diag.ev("descartada", id=fid, motivo="repetida")
-                continue
+                return
+            if self.resolver_voz and self.candidatas_voz and self._paralelo():
+                # enquanto a escuta decide (homem? mulher?), ja pede a fala nas vozes possiveis
+                self.previa(texto, voz, tom, vel, quem, cat)
             if self.resolver_voz:
                 try:
-                    r = self.resolver_voz(pag, texto, voz, tom, vel, quem, cat, visto)
+                    with self.trava_resolver:
+                        r = self.resolver_voz(pag, texto, voz, tom, vel, quem, cat, visto)
                     if r:
                         voz, tom, vel, quem, cat = r
                 except Exception as e:
                     diag.ev("resolver_voz_erro", id=fid, erro=repr(e)[:160])
                 if self._velha(ger, pag):
                     diag.ev("descartada", id=fid, motivo="ficou para trás enquanto ouvia a voz")
-                    continue
+                    return
+            voz, tom, vel = self._voz_unica(voz, tom, vel)   # a escuta pode ter trocado a voz
             pressa = self._pressa(visto, pag)
             d = self.banco.vozes.get(voz, {})
-            vel_total = vel * float(d.get("velocidade", 1.0)) * float(self.cfg.get("velocidade", 1.0)) * pressa
+            vel_base = vel * float(d.get("velocidade", 1.0)) * float(self.cfg.get("velocidade", 1.0))
+            vel_total = vel_base * pressa
             tom_total = tom * float(d.get("tom", 1.0))
             motores = [self.motor_atual()]
-            if motores[0] is not self.rapida:
+            if motores[0] is self.clonada and self.clonada is not None and self._clonada_presa():
+                motores = []                      # a clonada ainda esta presa na fala anterior
+            if not motores or motores[0] is not self.rapida:
                 motores.append(self.rapida)
             vol = float(self.cfg.get("volume", 0.9))
             for m in motores:
                 nivel = Nivelador()
                 t0 = time.time()
                 primeiro = True
-                diag.ev("gerar_inicio", id=fid, motor=m.nome, pressa=round(pressa, 2),
-                        espera_ms=round((t0 - visto) * 1000), fila=self.fila.qsize())
+                diag.ev("gerar_inicio", id=fid, motor=m.nome, voz=voz, quem=quem, pressa=round(pressa, 2),
+                        espera_ms=round((t0 - visto) * 1000), fila=self.fila.qsize(), **self._uso_pc())
                 k, total_audio = 0, 0.0
                 try:
-                    for w, sr, pausa in m.gerar(preparar_fala(texto), voz, tom_total, vel_total):
+                    if m is self.clonada:
+                        pedacos = self._vigiado(m, preparar_fala(texto), voz, tom_total, vel_total)
+                    else:
+                        # voz rapida: pede na velocidade normal (igual a fala antecipada, que ja pode
+                        # estar pronta) e acelera aqui mesmo, sem mudar o tom, se estiver atrasada
+                        pedacos = m.gerar(preparar_fala(texto), voz, tom_total, vel_base)
+                        if pressa > 1.01:
+                            pedacos = ((acelerar(w_, pressa, sr_), sr_, pausa_ / pressa)
+                                       for w_, sr_, pausa_ in pedacos)
+                    for w, sr, pausa in pedacos:
                         k += 1
                         total_audio += (len(w) / sr) + pausa
                         diag.ev("pedaco", id=fid, k=k, pronto_ms=round((time.time() - t0) * 1000),
@@ -882,12 +1667,12 @@ class Narrador:
                                     "voz": voz, "voz_nome": d.get("nome", voz), "motor": m.nome,
                                     "atraso_ms": round((time.time() - visto) * 1000),
                                     "gerou_ms": round((time.time() - t0) * 1000),
-                                    "pressa": round(pressa, 2),
+                                    "pressa": round(pressa, 2), "visto": visto,
                                     # duracao prevista da fala inteira (~12 letras/s, como no limite do XTTS)
                                     "previsto_s": len(normalizar(texto)) / 12.0 / max(0.5, vel_total),
                                     "taxa": self.taxa_geracao.get(m.nome)}
                             primeiro = False
-                        self.audio.put((ger, pag, w, sr, dict(info or {}, id=fid, primeiro=info is not None)))
+                        saida((ger, pag, w, sr, dict(info or {}, id=fid, primeiro=info is not None)))
                     gasto = time.time() - t0
                     if total_audio >= 0.8 and not self._velha(ger, pag):
                         nova = total_audio / max(0.001, gasto)
@@ -895,16 +1680,136 @@ class Narrador:
                         self.taxa_geracao[m.nome] = nova if ant is None else ant * 0.6 + nova * 0.4
                     diag.ev("gerar_fim", id=fid, total_ms=round((time.time() - t0) * 1000),
                             audio_s=round(total_audio, 2),
-                            velocidade=round(total_audio / max(0.001, time.time() - t0), 2))
-                    self.audio.put((ger, pag, None, 24000, {"id": fid, "fim": True}))
+                            velocidade=round(total_audio / max(0.001, time.time() - t0), 2),
+                            motor=m.nome, **self._uso_pc())
+                    saida((ger, pag, None, 24000, {"id": fid, "fim": True}))
                     break
+                except ClonadaTravou as e:
+                    diag.ev("clonada_travou", id=fid, fase=e.fase, esperou_s=e.esperou, pedacos=k,
+                            **self._uso_pc())
+                    if not self.clonada_lenta:
+                        self.clonada_lenta = True
+                        log("⚠ A voz clonada travou (placa de vídeo cheia com o jogo): usando a voz rápida "
+                            "até ela voltar.", tipo="aviso")
+                    if not primeiro:              # ja tinha comecado a falar: termina aqui
+                        saida((ger, pag, None, 24000, {"id": fid, "fim": True}))
+                        break
                 except Exception as e:
                     log(f"Erro ao gerar a fala ({m.nome}):", repr(e), tipo="erro")
                     if not primeiro:
                         break
 
+    @staticmethod
+    def _uso_pc():
+        """Como estava o PC agora: % da placa de video em uso, memoria livre nela e RAM livre. Vai
+        junto de cada fala no registro para saber se o atraso foi da placa ou da RAM."""
+        d = {}
+        try:
+            from .util import medidor_placa
+            d.update(medidor_placa().agora())
+        except Exception:
+            pass
+        try:
+            import psutil
+            d["ram_livre_gb"] = round(psutil.virtual_memory().available / 2 ** 30, 2)
+        except Exception:
+            pass
+        return d
+
+    def _clonada_presa(self):
+        """A geracao da voz clonada da fala anterior ainda nao voltou (travou na placa de video)."""
+        t = self._clonada_thread
+        presa = t is not None and t.is_alive() and self._clonada_abandonada
+        if not presa and self.clonada_lenta and t is not None and not t.is_alive():
+            self.clonada_lenta = False
+            log("✅ A voz clonada voltou ao normal.", tipo="ok")
+            diag.ev("clonada_voltou")
+        return presa
+
+    def _vigiado(self, m, texto, voz, tom, vel):
+        """Gera com a voz clonada numa thread separada e espera cada pedaco com limite de tempo.
+        Com um jogo pesado enchendo a placa (RDR2), o XTTS chegou a TRAVAR dentro do driver (nao
+        voltava mais) ou a levar 7 s para comecar: a voz simplesmente nao saia. Passando do limite,
+        larga a clonada e esta fala sai na voz rapida; as proximas tambem, ate a clonada voltar."""
+        q, acabou, parar = queue.Queue(), object(), threading.Event()
+
+        def trabalhar():
+            try:
+                for item in m.gerar(texto, voz, tom, vel):
+                    if parar.is_set():
+                        break
+                    q.put(item)
+            except Exception as e:
+                q.put(e)
+            finally:
+                q.put(acabou)
+
+        t = threading.Thread(target=trabalhar, daemon=True, name="clonada")
+        self._clonada_thread, self._clonada_abandonada = t, False
+        t.start()
+        limite_1 = float(self.cfg.get("clonada_limite_s", 4.0))       # ate o 1o pedaco
+        limite_n = float(self.cfg.get("clonada_limite_pedaco_s", 3.0))  # entre um pedaco e outro
+        primeiro = True
+        try:
+            while True:
+                lim = limite_1 if primeiro else limite_n
+                try:
+                    item = q.get(timeout=lim)
+                except queue.Empty:
+                    self._clonada_abandonada = True
+                    raise ClonadaTravou("1o pedaco" if primeiro else "meio da fala", lim)
+                if item is acabou:
+                    return
+                if isinstance(item, Exception):
+                    raise item
+                primeiro = False
+                yield item
+        finally:
+            parar.set()
+
+    def _vigiar_saida(self):
+        """Confere a cada segundo qual e a saida de som padrao do Windows. O audio da voz fica aberto
+        o tempo todo (manter_audio_ligado) e o PortAudio guarda a lista de aparelhos de quando abriu:
+        se o padrao muda depois (fone Bluetooth conectou, o jogo trocou a saida), o jogo vai para o
+        aparelho novo e a voz continuava saindo no antigo (ex.: alto-falante desligado) - parecia
+        que a voz nao saia. Quando muda, marca para reabrir o audio no aparelho novo."""
+        try:
+            import comtypes
+            try:
+                # importar o comtypes nesta thread ja pode ter iniciado o COM (STA): qualquer modo serve
+                comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+            except OSError:
+                pass
+            from pycaw.pycaw import AudioUtilities
+        except Exception as e:
+            diag.ev("saida_vigia_erro", erro=repr(e)[:160])
+            return
+        while True:
+            try:
+                d = AudioUtilities.GetSpeakers()
+                ident = getattr(d, "id", None) or d.GetId()
+                nome = getattr(d, "FriendlyName", "") or ""
+                if ident != self.saida_id:
+                    if self.saida_id is not None:
+                        self.saida_trocou = nome or "?"
+                    self.saida_id, self.saida_nome = ident, nome
+            except Exception:
+                pass
+            time.sleep(1.0)
+
     def _abrir(self, sr):
         import sounddevice as sd
+        if self.saida_trocou and self.stream is not None:
+            nome, self.saida_trocou = self.saida_trocou, None
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+            sd._terminate()                       # recarrega a lista de aparelhos (o padrao mudou)
+            sd._initialize()
+            log(f"🔈 Saída de som mudou: a voz agora sai em “{nome}”.", tipo="aviso")
+            diag.ev("saida_trocou", aparelho=nome)
         if self.stream is not None and self.sr == sr:
             return
         if self.stream is not None:
@@ -915,6 +1820,10 @@ class Narrador:
         self.stream = sd.OutputStream(samplerate=sr, channels=1, dtype="float32", latency="low")
         self.stream.start()
         self.sr = sr
+        try:
+            diag.ev("saida_aberta", aparelho=sd.query_devices(self.stream.device)["name"])
+        except Exception:
+            pass
 
     def _escrever(self, bloco, sr):
         import sounddevice as sd
@@ -1014,7 +1923,12 @@ class Narrador:
                 # COLCHAO: antes de comecar uma fala, espera um pouquinho (ate pre_buffer_ms) pelo 2o
                 # pedaco. Com a placa de video dividida (video rodando), o 2o pedaco as vezes atrasa
                 # e virava um buraco logo no comeco da frase. Se ele chegar antes, comeca na hora.
-                ate = time.time() + float(self.cfg.get("pre_buffer_ms", 120)) / 1000
+                # (na voz rapida/online os pedacos chegam ~5x mais rapido do que tocam: nao espera)
+                # voz clonada gerando a 2,5x+ (gerador rapido na placa): o 2o pedaco chega bem antes
+                # do 1o acabar de tocar, esperar por ele so atrasava ~120 ms (16/11)
+                folgada = (info.get("taxa") or 0) >= float(self.cfg.get("pre_buffer_taxa", 2.5))
+                ate = time.time() + (0.0 if info.get("motor") == "rapida" or folgada else
+                                     float(self.cfg.get("pre_buffer_ms", 120)) / 1000)
                 while time.time() < ate:
                     try:
                         if any((it[4] or {}).get("id") == fid for it in list(self.audio.queue)):
@@ -1028,6 +1942,10 @@ class Narrador:
                 sr = self.SR
             try:
                 if info:
+                    if info.get("visto"):
+                        # atraso DE VERDADE: da legenda aparecer ate o som sair agora (com as falas
+                        # geradas em paralelo, a fala fica pronta antes e espera a anterior acabar)
+                        info["atraso_ms"] = round((time.time() - info["visto"]) * 1000)
                     diag.ev("tocar_inicio", id=fid, atraso_ms=info["atraso_ms"], fila_audio=self.audio.qsize())
                     self.falando = True
                     extra = f", +{round((info['pressa'] - 1) * 100)}%" if info.get("pressa", 1) > 1.01 else ""
@@ -1040,6 +1958,12 @@ class Narrador:
                 if fid == self.ult_id and self.ritmo_fala > 1.01:
                     wav = acelerar(wav, self.ritmo_fala, sr)
                     n, ritmo = len(wav), self.ritmo_fala
+                elif info:
+                    r0 = self._ritmo_inicial(pag, info, self._restante(pag, n / sr))
+                    if r0 > 1.03:
+                        wav = acelerar(wav, r0, sr)
+                        n, ritmo = len(wav), r0
+                        diag.ev("acelerou", id=fid, fator=round(r0, 2), inicio=True)
                 while i < n:
                     if ger != self.ger and not terminar:
                         if (n - i) / sr <= self.tol:
@@ -1048,7 +1972,9 @@ class Narrador:
                             fim = min(n, i + int(sr * 0.06))
                             self._escrever(wav[i:fim] * np.linspace(1, 0, fim - i, dtype=np.float32), sr)
                             break
-                    if pag < self.pular_ate:          # ficou 2 falas atras: some suave e pula
+                    # ficou 2 falas atras: some suave e pula. Mas se falta menos de 1 s do pedaco, termina
+                    # (15/11: cortou o "vamos saindo?" do fim com so 0,58 s faltando)
+                    if pag < self.pular_ate and (n - i) / sr > float(self.cfg.get("terminar_se_falta_s", 1.0)):
                         fim = min(n, i + int(sr * 0.08))
                         self._escrever(wav[i:fim] * np.linspace(1, 0, fim - i, dtype=np.float32), sr)
                         log("⏭ Pulei o resto de uma fala que ficou muito atrás da tela.", tipo="aviso")
@@ -1057,8 +1983,8 @@ class Narrador:
                     if (i // bloco) % 3 == 0:          # a cada 120 ms confere se precisa acelerar
                         alvo = self._ritmo(pag, self._restante(pag, (n - i) / sr) * ritmo)
                         if alvo - ritmo >= 0.05:          # dentro de uma fala so acelera, nunca desacelera
-                            # muda aos poucos (10% por vez), sem tranco; o tom nao muda
-                            novo = ritmo + min(0.1, alvo - ritmo)
+                            # muda aos poucos (ate 15% por vez), sem tranco; o tom nao muda
+                            novo = ritmo + min(0.15, alvo - ritmo)
                             wav = np.concatenate([wav[:i], acelerar(wav[i:], novo / ritmo, sr)])
                             n, ritmo = len(wav), novo
                             diag.ev("acelerou", id=fid, fator=round(novo, 2))
