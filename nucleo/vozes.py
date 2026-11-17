@@ -936,8 +936,19 @@ class MotorRapida:
         self._edge_falhas, self._edge_ruim_ate, self._edge_sonda = 0, 0.0, 0.0
         self._exec = None
         self.pronta = threading.Event()        # vozes locais carregadas e aquecidas
-        threading.Thread(target=self._precarregar, daemon=True).start()
+        self._precarregando = False
+        # so pre-carrega se ela for a voz escolhida (rapida/local). Com a clonada escolhida ela so
+        # cobre os primeiros segundos/travadas e carrega sob demanda: assim nao disputa o disco e
+        # o processador com a clonada ao abrir.
+        if cfg.get("motor") != "clonada":
+            self.precarregar()
         self.acordar_vozes()
+
+    def precarregar(self):
+        if self._precarregando or self.pronta.is_set():
+            return
+        self._precarregando = True
+        threading.Thread(target=self._precarregar, daemon=True).start()
 
     def _precarregar(self):
         """Carrega as vozes locais logo ao abrir e ja fala um "oi" mudo com cada uma: a 1a fala de

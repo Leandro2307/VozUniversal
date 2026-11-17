@@ -95,8 +95,13 @@ class Nucleo:
         self.palavras_vistas = {}          # palavra com maiuscula vista no meio das falas -> quando
         ouvir_log(lambda item: self.emitir("log", item))
         if cfg.get("motor") == "clonada":
-            # so depois de tudo pronto (antes dava erro e nao carregava); a visao vem primeiro
-            self.narr.ligar_clonada(antes=self._carregar_visao_agora)
+            # so depois de tudo pronto (antes dava erro e nao carregava). A visao carrega JUNTO, em
+            # paralelo: antes a clonada esperava a rapida aquecer e a visao terminar (39 s parada
+            # ao ligar o PC). Medido 16/11: juntas 16-20 s contra 19-26 s em serie, mesmo pico de
+            # RAM (4,9 GB) - a carga direta na placa acabou com os +3 GB de antes.
+            self.narr.ligar_clonada()
+            if self.visao:
+                self.visao.preparar()
 
     # ------------------------------------------------------------- eventos para o painel
     def emitir(self, tipo, dados=None):
@@ -189,6 +194,8 @@ class Nucleo:
         self.salvar_config()
         if chave == "motor" and valor == "clonada":
             self.narr.ligar_clonada()
+        elif chave == "motor":
+            self.narr.rapida.precarregar()          # rapida/local: aquece as vozes do PC agora
         if chave == "escuta" and valor and not self.escuta:
             try:
                 from .escuta import Escuta
@@ -1236,28 +1243,14 @@ class Nucleo:
             self._talvez_carregar_visao()
             time.sleep(max(0.01, self.cfg["intervalo_ms"] / 1000 - (time.time() - t0)))
 
-    def _carregar_visao_agora(self):
-        """Carrega a visao e ESPERA terminar (roda na thread que depois carrega a voz clonada)."""
-        # 1o a voz rapida termina de aquecer: e ela que fala nos primeiros segundos (carregando tudo
-        # junto, uma fala logo ao abrir levou 4,6 s; medido as 05:25)
-        self.narr.rapida.pronta.wait(20)
-        v = self.visao
-        if not v or v.pronta or not self.cfg.get("visao", True):
-            return
-        v.preparar()
-        t0 = time.time()
-        while v.carregando and time.time() - t0 < 60:
-            time.sleep(0.2)
-        self.narr.aviso("motor", {})           # o painel mostra "Visão: pronta" na hora
-
     def _talvez_carregar_visao(self):
         """Carrega a visao (CLIP) num momento CALMO: sem fala sendo gerada/tocada. Carregar no meio de uma fala travava a placa de video e abria um buraco de
         ~1,5 s (medido as 03:38)."""
         v = self.visao
         if not v or v.pronta or v.carregando or not self.cfg.get("visao", True):
             return
-        # ao abrir, a visao ja e carregada ANTES da voz clonada (_carregar_visao_ja); carregar as
-        # duas ao mesmo tempo deixava o programa com +3 GB de memoria (medido as 04:25)
+        # ao abrir, a visao ja carrega junto com a voz clonada (no __init__). Fora isso (ex.: foi
+        # descarregada por falta de memoria) espera a clonada terminar para nao disputar a memoria
         if self.narr.estado_clonada == "carregando":
             return
         if self.narr.falando or not self.narr.fila.empty() or not self.narr.audio.empty():
