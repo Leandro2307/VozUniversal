@@ -606,8 +606,13 @@ class Nucleo:
             # ("TÔ escorregando!" em vez de "Tôescorregando!") — medido num video em janela
             img = img.resize((int(img.width * esc), int(img.height * esc)), Image.LANCZOS)
             img = ImageOps.autocontrast(ImageOps.grayscale(img)).convert("RGB")
-        motivos = []
-        bloco = achar_legenda(img, dic=self.dic, motivos=motivos)
+        motivos, textos_tela = [], []
+        bloco = achar_legenda(img, dic=self.dic, motivos=motivos, textos_tela=textos_tela)
+        if textos_tela:
+            # mensagem no celular / carta na cena: a legenda vem primeiro, o texto e lido depois
+            b = max(textos_tela, key=lambda k: sum(len(l[0]) for l in k))
+            bx0, bx1 = vx0 + min(l[1] for l in b) / esc, vx0 + max(l[3] for l in b) / esc
+            self._ver_texto_tela(sct, area, (vx0, vy0, vx1, vy1), (bx0, bx1))
         alt_txt = None
         if bloco:
             bloco, alt_txt = self._segunda_leitura(img, bloco)
@@ -735,6 +740,81 @@ class Nucleo:
         if not texto or (len(texto.split()) < 2 and (texto[-1:] not in FIM or len(re.findall(r"[^\W\d_]", texto)) < 3)):
             return "", nome
         return texto, nome
+
+    def _ver_texto_tela(self, sct, area, video, faixa_x):
+        """Texto escrito na cena (mensagem no celular, carta) visto na parte de baixo do video. O
+        recorte da legenda comeca no meio do video e cortava o comeco ("logo agora que..." em vez de
+        "Nao acredito que voce me quer,", 18/11): le o VIDEO INTEIRO e pega o bloco todo.
+        Quando a mesma leitura se repete (texto parado na tela), fica pendente em self._tela_pendente
+        e e falado depois da legenda (ver _falar_texto_tela)."""
+        agora = time.time()
+        if agora - getattr(self, "_tela_ult", 0) < 1.0:
+            return
+        self._tela_ult = agora
+        x, y, _, _ = area
+        vx0, vy0, vx1, vy1 = video
+        # so a coluna do texto (com folga dos lados), na altura toda do video, AMPLIADA: letra de
+        # celular e miuda e sem ampliar o OCR comia palavras ("esquisitao", "nenhuma mulher")
+        larg = faixa_x[1] - faixa_x[0]
+        cx0, cx1 = max(vx0, int(faixa_x[0] - 0.4 * larg)), min(vx1, int(faixa_x[1] + 0.4 * larg))
+        reg = {"left": x + cx0, "top": y + vy0, "width": max(40, cx1 - cx0), "height": max(40, vy1 - vy0)}
+        try:
+            from PIL import ImageOps
+            img = capturar(sct, reg)
+            esc = max(1.0, min(2.5, 2600 / max(img.width, img.height)))
+            img = img.resize((int(img.width * esc), int(img.height * esc)), Image.LANCZOS)
+            img = ImageOps.autocontrast(ImageOps.grayscale(img)).convert("RGB")
+            linhas = [l for l in ocr_linhas(img) if len(re.findall(r"[^\W_]", l[0])) >= 2]
+        except Exception as e:
+            diag.ev("texto_tela_erro", erro=repr(e)[:120])
+            return
+        from .tela import agrupar_blocos, eh_texto_de_tela
+        fx0, fx1 = (faixa_x[0] - cx0) * esc, (faixa_x[1] - cx0) * esc
+        melhor = None
+        for b in agrupar_blocos(linhas):
+            bx0, bx1 = min(l[1] for l in b), max(l[3] for l in b)
+            if not eh_texto_de_tela(b) or min(bx1, fx1) - max(bx0, fx0) < 0.5 * (fx1 - fx0):
+                continue          # outro bloco (nao e o que apareceu embaixo)
+            if melhor is None or len(b) > len(melhor):
+                melhor = b
+        if not melhor:
+            return
+        texto = limpar(" ".join(l[0] for l in em_ordem(melhor)))
+        if self.dic.ok:
+            texto = self.dic.consertar(texto)
+        norm = normalizar(texto)
+        lidos = getattr(self, "_tela_lidos", None)
+        if lidos is None:
+            lidos = self._tela_lidos = collections.deque(maxlen=20)
+        if any(semelhanca(norm, n) >= 0.8 for n in lidos):
+            return                # ja foi falado (o celular continua na tela)
+        ant = getattr(self, "_tela_visto", None)
+        if ant and semelhanca(norm, ant[0]) >= 0.85:
+            # 2a leitura igual: o texto esta parado na tela (nao e a mensagem sendo digitada)
+            fica = texto if len(texto) >= len(ant[1]) else ant[1]
+            if not getattr(self, "_tela_pendente", None):
+                self._tela_pendente = (fica, agora)
+                diag.ev("texto_tela", texto=fica[:80])
+            self._tela_visto = (norm, fica)
+        else:
+            self._tela_visto = (norm, texto)
+
+    def _falar_texto_tela(self, texto_legenda, agora):
+        """Fala o texto da cena pendente DEPOIS da legenda: quando nao ha legenda na tela, quando a
+        legenda de agora ja foi falada, ou depois de 6 s esperando."""
+        pend = getattr(self, "_tela_pendente", None)
+        if not pend:
+            return
+        texto, desde = pend
+        ult = getattr(self, "_ult_fala", None)
+        legenda_falada = bool(ult and ult[2] >= desde - 3 and texto_legenda
+                              and self._mesmo_texto(ult[1], texto_legenda))
+        if texto_legenda and not legenda_falada and agora - desde < 6.0:
+            return
+        self._tela_pendente = None
+        self._tela_lidos.append(normalizar(texto))
+        diag.ev("fala_texto_tela", texto=texto[:80])
+        self.narr.falar(texto, "narrador", quem="", categoria="tela", nova=True, visto=agora)
 
     def _segunda_leitura(self, img, bloco):
         """Le de novo so o recorte da legenda, com o texto claro em preto sobre branco (sem o fundo
@@ -975,6 +1055,8 @@ class Nucleo:
         esc = self.escuta
         if not esc or not esc.ativa or not self.cfg.get("escuta", True) or not self.elenco:
             return None
+        if cat == "tela":
+            return None           # texto do celular/carta: sempre o narrador (nao e quem fala no jogo)
         if pag in self._voz_pag:
             return self._voz_pag[pag]
         if pag in getattr(self, "_oposto", {}) and (cat == "narrador" or not quem):
@@ -1471,6 +1553,8 @@ class Nucleo:
                 elif getattr(self, "_parte1", False):
                     self._parte1_pag = self.narr.pag
                     self._parte1 = False
+        if self._modo_legenda():
+            self._falar_texto_tela(texto, agora)
 
     # ------------------------------------------------------------- teclas
     def alternar_pausa(self):

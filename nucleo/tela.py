@@ -521,11 +521,19 @@ def palavra_que_e_fala(t):
     return False
 
 
-def achar_legenda(img, linhas=None, dic=None, motivos=None):
+def eh_texto_de_tela(b):
+    """Bloco com 4+ linhas: paragrafo escrito NA CENA (mensagem no celular, carta, bilhete), nao
+    legenda (legenda tem no maximo 3 linhas)."""
+    return len(b) >= 4 and len(limpar(" ".join(l[0] for l in b)).split()) >= 12
+
+
+def achar_legenda(img, linhas=None, dic=None, motivos=None, textos_tela=None):
     """Na parte de baixo de um video, acha o bloco que e a LEGENDA: centralizado na horizontal
     (titulo de capitulo do YouTube, relogio e botoes ficam de lado), com cara de frase.
     Entre varios, fica com o que tem mais texto e esta mais embaixo. -> linhas do bloco ou None.
-    motivos (lista): recebe (texto, por que foi descartado) de cada bloco, para o diagnostico."""
+    motivos (lista): recebe (texto, por que foi descartado) de cada bloco, para o diagnostico.
+    textos_tela (lista): recebe os blocos que sao texto escrito na cena (celular, carta): eles nao
+    competem com a legenda (antes o texto do celular, mais comprido, ganhava dela, 18/11)."""
     if linhas is None:
         linhas = [l for l in ocr_linhas(img) if len(re.findall(r"[^\W_]", l[0])) >= 2]
     w, h = img.size
@@ -546,6 +554,11 @@ def achar_legenda(img, linhas=None, dic=None, motivos=None):
             fora(t, "capitulo do YouTube")
             continue
         com_nome = bool(_PREFIXO.match(consertar_prefixo(b[0])[0]))
+        if eh_texto_de_tela(b) and not com_nome:
+            fora(t, "texto na cena (celular/carta)")
+            if textos_tela is not None:
+                textos_tela.append(b)
+            continue
         if abs((x0 + x1) / 2 / w - 0.5) > 0.12 and not com_nome:
             fora(t, "fora do centro")
             continue                                   # legenda e centralizada
