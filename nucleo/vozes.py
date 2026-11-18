@@ -321,9 +321,11 @@ class Banco:
 
     def do_personagem(self, nome):
         """Voz exclusiva reservada para este nome de personagem (campo "personagens" do banco.json)."""
-        n = (nome or "").strip().casefold()
+        # sem acento e sem pontuacao em volta: o OCR le "Lúcia"/"Lucia" e as vezes pega o ":"
+        from .util import sem_acento
+        n = sem_acento((nome or "").strip(" .,:;!?'\"()").casefold())
         for k, v in self.vozes.items():
-            if any(n == p.casefold() for p in v.get("personagens", [])):
+            if any(n == sem_acento(p.casefold()) for p in v.get("personagens", [])):
                 return k
         return None
 

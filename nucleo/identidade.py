@@ -81,16 +81,82 @@ def nomes_proprios():
     return _NOMES_PROPRIOS
 
 
+_AUTO, _AUTO_SUF, _COMUNS = {}, {}, {}
+
+
+def _carregar_auto():
+    """recursos\nomes_auto.txt (gerado por instalador\gerar_nomes_auto.py, IBGE + EUA):
+    ~100 mil nomes -> probabilidade de ser mulher, e as terminacoes ("~ele 0.94 945")."""
+    if _AUTO:
+        return
+    import os
+    from .util import RECURSOS
+    try:
+        for linha in open(os.path.join(RECURSOS, "nomes_auto.txt"), encoding="utf-8"):
+            p = linha.split()
+            if linha.startswith("#") or len(p) < 2:
+                continue
+            if p[0].startswith("~") and len(p) == 3:
+                _AUTO_SUF[p[0][1:]] = (float(p[1]), int(p[2]))
+            else:
+                _AUTO[p[0]] = float(p[1])
+        # palavras do portugues ("atendente", "motorista"): cargo, nao nome proprio -> a terminacao
+        # nao vale para elas (nome raro/inventado de verdade nao esta nas 50 mil palavras)
+        for linha in open(os.path.join(RECURSOS, "palavras_pt.txt"), encoding="utf-8"):
+            p = linha.split()
+            if len(p) == 2 and p[1].isdigit():
+                _COMUNS[sem_acento(p[0])] = int(p[1])
+    except Exception:
+        pass
+    _AUTO.setdefault("_", 0.5)
+
+
+def _palavra(p):
+    """"Dre'Quan" -> "drequan", "Lúcia:" -> "lucia" (so letras, sem acento)."""
+    return "".join(c for c in sem_acento(p or "") if c.isalpha())
+
+
+def palpite_nome(palavra):
+    """Sexo de um nome que NINGUEM pos na lista, analisado na hora:
+      1. esta entre os ~100 mil nomes do IBGE/EUA ("Rochele" -> 99% mulher)
+      2. senao, pela terminacao ("Marizete": nomes em -ete sao 96% de mulher)
+    -> (sexo, certeza 0.5..1, "nome"|"terminacao") ou None (nome de homem e mulher, ou sem pista)."""
+    _carregar_auto()
+    p = _palavra(palavra)
+    if len(p) < 2:
+        return None
+    if p in _AUTO:
+        pf = _AUTO[p]
+        return ("f", pf, "nome") if pf >= 0.8 else (("m", 1 - pf, "nome") if pf <= 0.2 else None)
+    if p in _COMUNS or len(p) < 4:
+        return None               # palavra do dia a dia (cargo, apelido curto): fica para as outras regras
+    for k in range(min(5, len(p) - 1), 1, -1):
+        s = _AUTO_SUF.get(p[-k:])
+        if s and s[1] >= 30:
+            pf = s[0]
+            if pf >= 0.75:
+                return "f", pf, "terminacao"
+            if pf <= 0.25:
+                return "m", 1 - pf, "terminacao"
+            return None           # terminacao que serve para os dois ("-el": Rachel, Daniel)
+    return None
+
+
 def sexo_do_nome(nome):
-    """Sexo de um nome proprio CONHECIDO (recursos\nomes.txt): "Catherine" -> "f". Senao "".
-    Vale mais que a voz ouvida: na legenda a escuta muitas vezes pega o outro personagem falando
-    (a Catherine do RDR2 ficou com voz de homem idoso por isso, 15/11)."""
+    """Sexo de um nome proprio CONHECIDO: "Catherine" -> "f". Senao "".
+    Primeiro recursos\nomes.txt (o usuario manda), depois os nomes do IBGE/EUA quando quase
+    certos (95%+). Vale mais que a voz ouvida: na legenda a escuta muitas vezes pega o outro
+    personagem falando (a Catherine do RDR2 ficou com voz de homem idoso por isso, 15/11)."""
     lista = nomes_proprios()
-    for p in (nome or "").lower().split():
-        p = p.strip(".,:;!?'\"()")
-        g = lista.get(p) or lista.get(sem_acento(p))
+    palavras = [p.strip(".,:;!?'\"()") for p in (nome or "").lower().split()]
+    for p in palavras:
+        g = lista.get(p) or lista.get(sem_acento(p)) or lista.get(_palavra(p))
         if g in ("f", "m"):
             return g
+    if palavras and not any(_NOME.get(p) for p in palavras):
+        pal = palpite_nome(palavras[0])          # so o 1o nome ("Brian Heder" -> Brian)
+        if pal and pal[2] == "nome" and pal[1] >= 0.95:
+            return pal[0]
     return ""
 
 
@@ -117,6 +183,17 @@ def pistas_nome(nome):
         if g:
             return [("s", g, 2.5, f"“{p.title()}” é nome {'feminino' if g == 'f' else 'masculino'}")]
     p0 = palavras[0] if palavras else ""
+    # analisa o nome na hora: base de nomes do IBGE/EUA ou, se nao estiver la, a terminacao
+    pal = palpite_nome(p0)
+    if not pal and _palavra(p0) in _AUTO:
+        return saida              # nome de homem e de mulher (Taylor, Jordan): sem pista pelo nome
+    if pal:
+        g, cert, fonte = pal
+        gen = "feminino" if g == "f" else "masculino"
+        if fonte == "nome":
+            return [("s", g, round(2.5 * (cert - 0.5) * 2, 2), f"“{p0.title()}” é nome {gen} ({cert * 100:.0f}%)")]
+        return [("s", g, round(0.6 + 6.4 * (cert - 0.75), 2),     # 75% -> 0,6 ... 100% -> 2,2
+                 f"“{p0.title()}” tem terminação de nome {gen} ({cert * 100:.0f}%)")]
     # palavras femininas na gramatica mas que servem pra homem e mulher: sem pista nenhuma
     if sem_acento(p0) in _NEUTRAS:
         return saida

@@ -557,3 +557,13 @@ cornwall m
 leviticus m
 josiah m
 orville m
+# ---- GTA VI (Vice City) — Lucia e Jason tem voz propria no banco (banco_vozes\banco.json)
+cal m
+boobie m
+dre'quan m
+drequan m
+dre m
+roxy f
+bae-luxe f
+baeluxe f
+dre’quan m

@@ -222,7 +222,9 @@
     "exclusiva": true,
     "personagens": [
       "Lucia",
-      "Lúcia"
+      "Lúcia",
+      "Lucia Caminos",
+      "Lúcia Caminos"
     ],
     "tom": 1.0,
     "velocidade": 1.0,
@@ -242,7 +244,9 @@
     "descricao": "Jason (clonado da ElevenLabs): só para o personagem Jason",
     "exclusiva": true,
     "personagens": [
-      "Jason"
+      "Jason",
+      "Jason Duval",
+      "Jay"
     ],
     "tom": 1.0,
     "velocidade": 1.0,
