@@ -33,6 +33,9 @@ class Abafador:
         self.exe = ""
         self.ok = True
         self.parar = False
+        # Sala 3D ligada: fn(nivel) — a propria sala abaixa o PS5 (o mixer abaixaria o Chrome inteiro)
+        self.sala_cb = None
+        self.fator_sala = 1.0
         self.thread = threading.Thread(target=self._laco, daemon=True, name="abafar")
         self.thread.start()
 
@@ -132,6 +135,19 @@ class Abafador:
         if falando:
             self.ult_fala = agora
         ligado = bool(self.cfg.get("abafar_jogo", True))
+        cb = self.sala_cb
+        if cb:
+            nivel = min(1.0, max(0.0, float(self.cfg.get("abafar_nivel", 0.25))))
+            alvo = nivel if ligado and agora - self.ult_fala < 0.5 else 1.0
+            if alvo != self.fator_sala:
+                # mesma curva do mixer: desce rapido, sobe devagar
+                if alvo < self.fator_sala:
+                    self.fator_sala = max(alvo, self.fator_sala - 0.25)
+                else:
+                    self.fator_sala = min(alvo, self.fator_sala + 0.06)
+                cb(self.fator_sala)
+        elif self.fator_sala != 1.0:
+            self.fator_sala = 1.0
         exe = (self.alvo() or "").lower() if ligado else ""
         if exe != self.exe:                      # trocou de jogo/janela: devolve o anterior
             self.restaurar()

@@ -49,9 +49,11 @@ def abrir_janela(porta):
                           "--disable-background-timer-throttling --disable-renderer-backgrounding "
                           "--disable-backgrounding-occluded-windows")
     import webview
+    # aberto pela Sala 3D (PS5 direto): a janela nasce minimizada, sem roubar a frente do jogo
     webview.create_window(
         "Voz Universal", f"http://127.0.0.1:{porta}/", width=1280, height=860,
-        min_size=(900, 620), frameless=True, easy_drag=False, background_color="#0b1230")
+        min_size=(900, 620), frameless=True, easy_drag=False, background_color="#0b1230",
+        minimized="--minimizada" in sys.argv)
     webview.start(gui="edgechromium", private_mode=False,
                   storage_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "recursos", "janela"))
 
@@ -64,7 +66,8 @@ def main():
     cfg = carregar_config()
     porta = int(cfg.get("porta", 8765))
     if not instancia_unica():
-        aviso("A Voz Universal já está aberta.")
+        if "--minimizada" not in sys.argv:      # aberto pela Sala 3D: o que ja esta aberto serve
+            aviso("A Voz Universal já está aberta.")
         return
     print("=" * 60)
     print("  VOZ UNIVERSAL   |   F10 pausa   |   F11 repete")
@@ -95,6 +98,8 @@ def main():
         nucleo.abafador.fechar()      # devolve o volume do jogo antes de sair
     except Exception:
         pass
+    from nucleo.sala import Sala
+    Sala.despublicar()                # a Sala 3D nao tenta mais falar com este
     os._exit(0)
 
 

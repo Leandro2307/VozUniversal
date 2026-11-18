@@ -50,10 +50,16 @@ class Nucleo:
             medidor_placa()                    # comeca a medir o uso da placa de video ja na abertura
         except Exception:
             pass
+        # "sala" so vale com a pagina da Sala 3D ligada: fechado no meio, abre na fonte de antes
+        if cfg.get("fonte") == "sala":
+            cfg["fonte"] = cfg.get("fonte_antes_sala") or "auto"
         self.narr = Narrador(cfg, self.banco, aviso=self.emitir)
         from .abafar import Abafador
+        from .sala import Sala
         self.exe_frente = ""               # programa da janela da frente (modo tela/video)
         self.jan = Janela(cfg)            # antes do abafador: a linha dele ja usa self.jan
+        self.sala = Sala(self)             # o PS5 direto da Sala 3D (video e som pela rede)
+        self.jan.sala = self.sala
         self.abafador = Abafador(cfg, self.narr, self._exe_do_som)
         self.pid_frente = 0                # processo da janela da frente (de onde vem o som)
         # ouve a voz ORIGINAL do jogo para saber se quem fala e homem, mulher ou crianca
@@ -107,8 +113,14 @@ class Nucleo:
     def emitir(self, tipo, dados=None):
         if tipo == "falando":
             self.ultimo_falando = dict(dados, quando=time.time())
+        sala = getattr(self, "sala", None)
         if tipo == "motor":
             dados = self.estado_motor()
+        if sala and sala.enviar:
+            if tipo == "falando":
+                sala.fala(dados)
+            elif tipo in ("motor", "status"):
+                sala.avisar_estado()
         for fn in list(self.ouvintes):
             try:
                 fn({"tipo": tipo, "dados": dados})
@@ -227,6 +239,26 @@ class Nucleo:
              "janela": "Lendo: a janela " + (f"“{j['titulo']}”" if tipo == 'janela' and j else 'escolhida') + "."}
             [self.cfg["fonte"]], tipo="ok")
 
+    # ------------------------------------------------------------- Sala 3D (PS5 direto)
+    def na_sala(self):
+        return self.cfg.get("fonte") == "sala"
+
+    def entrar_sala(self):
+        """A pagina da Sala 3D ligou: le o video do PS5 que chega por ela (nucleo/sala.py)."""
+        if not self.na_sala():
+            self.cfg["fonte_antes_sala"] = self.cfg.get("fonte") or "auto"
+        self.cfg["fonte"] = "sala"
+        self.frente_bloqueada = False
+        self.exe_frente, self.pid_frente = "", 0
+        self.salvar_config()
+        self.sala.avisar_estado()
+
+    def sair_sala(self):
+        if not self.na_sala():
+            return
+        self.cfg["fonte"] = self.cfg.get("fonte_antes_sala") or "auto"
+        self.salvar_config()
+
     def testar_voz(self, vid, texto=None, tom=1.0, vel=1.0, quem=""):
         d = self.banco.vozes.get(vid, {})
         texto = texto or {
@@ -247,8 +279,13 @@ class Nucleo:
         if not area:
             return None
         x, y, w, h = area
-        with (getattr(mss, "MSS", None) or mss.mss)() as sct:
-            img = capturar(sct, {"left": x, "top": y, "width": w, "height": h})
+        if self.na_sala():
+            img = self.sala.imagem()
+            if img is None:
+                return None
+        else:
+            with (getattr(mss, "MSS", None) or mss.mss)() as sct:
+                img = capturar(sct, {"left": x, "top": y, "width": w, "height": h})
         if img.width > 1280:
             img = img.resize((1280, int(img.height * 1280 / img.width)))
         buf = io.BytesIO()
@@ -374,7 +411,7 @@ class Nucleo:
     def _modo_legenda(self):
         """Video (tela inteira ou janela do navegador) sem caixa marcada a mao: procura a legenda
         a cada leitura, em vez de uma regiao fixa (cada video poe a legenda numa altura)."""
-        return (self.cfg.get("fonte") in ("tela", "janela") and self.cfg.get("modo_legenda", True)
+        return (self.cfg.get("fonte") in ("tela", "janela", "sala") and self.cfg.get("modo_legenda", True)
                 and not (self.perfil and self.perfil.dados.get("regiao_manual")))
 
     @staticmethod
@@ -484,6 +521,8 @@ class Nucleo:
 
     def _onde_video(self, sct, area, agora):
         """Retangulo do video na tela (fracoes), atualizado 4x por segundo pelo movimento."""
+        if self.na_sala():
+            return [0.0, 0.0, 1.0, 1.0]        # o quadro do PS5 e todo video (nao tem pagina em volta)
         if agora - self.ult_video >= 0.25:
             self.ult_video = agora
             x, y, w, h = area
@@ -514,6 +553,8 @@ class Nucleo:
         return None
 
     def _jogo_na_frente(self):
+        if self.na_sala():
+            return True
         exe = (getattr(self, "exe_frente", "") or "").lower()
         return bool(exe) and exe not in NAVEGADORES and not getattr(self, "frente_bloqueada", False)
 
@@ -792,7 +833,7 @@ class Nucleo:
     def _pagina_sem_video(self):
         """Navegador na frente mostrando a pagina inicial/lista do YouTube: o titulo da janela e so
         "YouTube" (num video aberto e "<titulo do video> - YouTube")."""
-        if (getattr(self, "exe_frente", "") or "").lower() not in NAVEGADORES:
+        if self.na_sala() or (getattr(self, "exe_frente", "") or "").lower() not in NAVEGADORES:
             return False
         t = re.sub(r"^\(\d+\)\s*", "", getattr(self, "titulo_frente", "") or "").strip()
         t = re.sub(r"\s+-\s+(Google Chrome|Microsoft.? Edge|Mozilla Firefox|Opera|Brave)$", "", t)
@@ -807,6 +848,8 @@ class Nucleo:
 
     def _da_janela_da_frente(self, reg):
         """O que aparece no meio e nos cantos de baixo da area e mesmo da janela da frente?"""
+        if self.na_sala():
+            return True
         try:
             import win32gui
             ass = self.video.assinatura
@@ -862,6 +905,8 @@ class Nucleo:
 
     def _exe_do_som(self):
         """Programa cujo som e abafado: o jogo escolhido ou, no modo tela/video, a janela da frente."""
+        if self.na_sala():
+            return ""          # quem abaixa o PS5 e a propria sala (Abafador.sala_cb)
         e = (self.jan.exe or "").lower()
         if e.endswith(".exe"):
             return e
@@ -869,6 +914,8 @@ class Nucleo:
 
     def _pid_do_som(self):
         """Processo cujo som e ouvido (voz original): a janela do jogo ou, no modo tela/video, a da frente."""
+        if self.na_sala():
+            return -1          # o som do PS5 chega pela sala (Gravador.empurrar)
         try:
             e = (self.jan.exe or "").lower()
             if e.endswith(".exe") and self.jan.raiz:
@@ -1217,7 +1264,7 @@ class Nucleo:
                 if self.jan.atualizar():
                     self._trocou_jogo()
                 self.area = self.jan.area()
-                self._passo(sct, t0, ult_procura)
+                self._passo(self.sala.sct if self.na_sala() else sct, t0, ult_procura)
                 if self.status == "procurando" and t0 - ult_procura >= 1.2:
                     ult_procura = t0
             except Exception as e:

@@ -39,6 +39,7 @@ O instalador sai em `dist\Instalar Voz Universal.exe`.
 | `nucleo/leitor.py` | decide quando cada frase (ou pedaço) está pronta para falar |
 | `nucleo/identidade.py` | sexo/idade do personagem e escolha da voz |
 | `nucleo/escuta.py` | grava só o som do jogo (loopback por processo do Windows) e diz se a voz original é de homem, mulher ou criança (Silero VAD + wav2vec2 da audEERING) |
+| `nucleo/sala.py` | fonte "sala": o PS5 direto da Sala 3D manda a imagem e o som por WebSocket e recebe a voz de volta |
 | `nucleo/vozes.py` | motores de voz (XTTS, Piper, Edge), fila, aceleração, alto-falante |
 | `nucleo/diagnostico.py` | registro detalhado de cada etapa (`diagnostico/*.jsonl`) |
 | `testes/unitarios.py` | testes rápidos com casos reais (nomes, OCR, filtros, frases). Rode depois de mexer no código |

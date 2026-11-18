@@ -17,6 +17,9 @@ from .util import FIM, RECURSOS, log, normalizar, semelhanca
 
 
 # ----------------------------------------------------------------- janela do jogo (qualquer jogo)
+SALA = -1          # "janela" da fonte sala: o PS5 direto da Sala 3D (nao e uma janela do Windows)
+
+
 class Janela:
     """Acompanha a janela do jogo. Sem jogo fixo, o jogo e a ultima janela grande que ficou em
     primeiro plano e nao e de um programa da lista de ignorados (navegador, explorer, etc.)."""
@@ -29,6 +32,7 @@ class Janela:
         self.titulo = ""
         self.meu_pid = os.getpid()
         self.prox_busca = 0.0
+        self.sala = None                       # nucleo/sala.py (fonte "sala")
 
     def _exe(self, h):
         try:
@@ -115,6 +119,16 @@ class Janela:
                       "janela" = uma janela escolhida no painel (cfg["fonte_hwnd"]), ex.: YouTube
         """
         fonte = self.cfg.get("fonte") or "auto"
+        if fonte == "sala":
+            # o PS5 direto da Sala 3D: a imagem chega pela rede (nucleo/sala.py), nao ha janela
+            if self.raiz != SALA:
+                self.raiz = self.alvo = SALA
+                self.exe, self.titulo = "ps5_sala", "PS5 (Sala 3D)"
+                return True
+            return False
+        if self.raiz == SALA:                  # saiu da sala: procura a fonte de antes
+            self.raiz, self.alvo, self.exe, self.titulo = None, None, "", ""
+            return True
         if fonte == "tela":
             mon = int(self.cfg.get("fonte_monitor") or 0)
             chave = f"tela_inteira_{mon + 1}"
@@ -183,6 +197,8 @@ class Janela:
         """(x, y, w, h) em pixels de tela da area do jogo, ou None (minimizado/fechado)."""
         if not self.raiz:
             return None
+        if self.raiz == SALA:
+            return self.sala.area() if self.sala else None
         if self.exe.startswith("tela_inteira"):
             mons = monitores()
             m = mons[min(int(self.cfg.get("fonte_monitor") or 0), len(mons) - 1)]
@@ -202,6 +218,8 @@ class Janela:
 
     def a_vista(self, reg):
         """True se e o jogo que aparece em toda a regiao (nenhuma janela por cima)."""
+        if self.raiz == SALA:
+            return True                        # a imagem vem da sala: nada fica por cima
         try:
             x0, y0 = reg["left"] + 4, reg["top"] + 4
             x1, y1 = reg["left"] + reg["width"] - 5, reg["top"] + reg["height"] - 5
@@ -279,6 +297,8 @@ def regiao_em_tela(area, frac):
 
 
 def capturar(sct, reg):
+    if hasattr(sct, "recortar"):          # fonte "sala": recorte do quadro do PS5 (nucleo/sala.py)
+        return sct.recortar(reg)
     im = sct.grab(reg)
     return Image.frombytes("RGB", im.size, im.bgra, "raw", "BGRX")
 

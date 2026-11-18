@@ -187,6 +187,11 @@ class Gravador:
             while self.pedacos and agora - self.pedacos[0][0] > self.memoria_s:
                 self.pedacos.popleft()
 
+    def empurrar(self, x):
+        """Som que chega de fora (a Sala 3D manda o do PS5): float32 mono 16 kHz."""
+        if self.modo == "sala" and len(x):
+            self._guardar(x)
+
     def trecho(self, t0, t1):
         """Audio entre t0 e t1 (horarios time.time). Trechos invalidos (narrador falando, no modo
         de reserva) e buracos (programa em silencio) viram zeros."""
@@ -215,6 +220,14 @@ class Gravador:
             pass
         while not self.parar:
             pid = int(self.alvo() or 0)
+            if pid < 0:
+                # fonte "sala": o som do PS5 chega pela Sala 3D (empurrar), so o jogo
+                self.modo, self.pid, self.erro = "sala", pid, ""
+                diag.ev("escuta", modo="sala")
+                while not self.parar and int(self.alvo() or 0) < 0:
+                    time.sleep(0.2)
+                self.modo = ""
+                continue
             try:
                 self._gravar_processo(pid)
             except Exception as e:

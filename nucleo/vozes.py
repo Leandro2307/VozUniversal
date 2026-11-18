@@ -1387,6 +1387,7 @@ class Narrador:
         self.saida_id = None      # saida de som padrao do Windows (muda quando conecta um fone)
         self.saida_nome = ""
         self.saida_trocou = None  # nome do aparelho novo -> o _tocar reabre o audio nele
+        self.espelho = None       # fn(bloco, sr): copia de cada pedaco tocado (Sala 3D, nucleo/sala.py)
         threading.Thread(target=self._sintetizar, daemon=True).start()
         threading.Thread(target=self._tocar, daemon=True).start()
         threading.Thread(target=self._vigiar_saida, daemon=True, name="saida").start()
@@ -1838,6 +1839,12 @@ class Narrador:
 
     def _escrever(self, bloco, sr):
         import sounddevice as sd
+        esp = self.espelho
+        if esp is not None:
+            try:
+                esp(bloco, sr)                    # Sala 3D: a mesma voz vai para quem joga
+            except Exception:
+                pass
         for tentativa in (1, 2):
             try:
                 self._abrir(sr)

@@ -1,3 +1,13 @@
+# Novidade de 17/11: ligado direto na Sala 3D (PS5 direto)
+
+- **Na Sala 3D, painel do PS5 direto → "Dublagem (Voz Universal)"**: um clique e pronto. A sala abre o Voz Universal sozinha (minimizado) se ele estiver fechado, e fica lembrado para as próximas vezes.
+- **Lê a imagem do PS5 direto da sala**, sem capturar a tela: a tela do PS5 não precisa ficar à vista, pode ter janela por cima ou a sala minimizada.
+- **Ouve só o som do PS5** (a sala manda ele separado): a voz dos amigos no chat não confunde mais o "homem ou mulher".
+- **Quem joga longe também ouve a voz em português**, misturada no som do PS5 (antes precisava do "Levar o som do PC" com o seletor do Chrome).
+- **Abafar:** neste PC quem abaixa o PS5 é a própria sala (o mixer do Windows abaixaria o Chrome inteiro, com a voz dos amigos junto).
+- Fechou a sala: o Voz Universal volta a ler a tela como estava.
+- Para quem desenvolve: `nucleo/sala.py` (fonte "sala", WebSocket `/sala` com token, porta e token em `%LOCALAPPDATA%\Sala3doz-universal.json`).
+
 # Novidade de 14/11 (fim da tarde): voz Local mais encorpada
 
 - **As vozes do modo Local passam por um "polimento"**: mais grave (corpo), mais presença e menos chiado metálico. Medido contra as vozes reais do banco: o Piper saía com 12 a 24 dB a menos de grave e ~5 dB a menos de presença. Com o polimento, o Cadu fica quase igual ao narrador real em quase todas as faixas.

@@ -119,6 +119,42 @@ def iniciar(nucleo, porta):
         clientes.discard(ws)
         return ws
 
+    async def sala_ws(req):
+        """A Sala 3D (PS5 direto): recebe o video e o som do PS5, devolve a voz (nucleo/sala.py).
+        So entra com o token do voz-universal.json (que o ajudante da sala le neste PC)."""
+        if req.query.get("t") != nucleo.sala.token:
+            return web.Response(status=403, text="token")
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=8 * 1024 * 1024)
+        await ws.prepare(req)
+
+        def enviar(msg):
+            async def mandar():
+                try:
+                    if isinstance(msg, str):
+                        await ws.send_str(msg)
+                    else:
+                        await ws.send_bytes(msg)
+                except Exception:
+                    pass
+            if not ws.closed:
+                asyncio.run_coroutine_threadsafe(mandar(), laco)
+
+        antiga = getattr(nucleo.sala, "_ws", None)
+        nucleo.sala._ws = ws
+        if antiga is not None and not antiga.closed:
+            await antiga.close()           # uma pagina por vez: a mais nova fica
+        nucleo.sala.ligou(enviar)
+        nucleo.sala.avisar_estado()
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.BINARY:
+                    nucleo.sala.recebeu(msg.data)
+                elif msg.type == WSMsgType.ERROR:
+                    break
+        finally:
+            nucleo.sala.desligou(enviar)
+        return ws
+
     async def estado(_):
         return web.json_response(nucleo.estado(), dumps=lambda d: json.dumps(d, ensure_ascii=False, default=str))
 
@@ -232,6 +268,7 @@ def iniciar(nucleo, porta):
     app = web.Application(client_max_size=64 * 1024 * 1024)
     app.router.add_get("/", pagina)
     app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/sala", sala_ws)
     app.router.add_get("/api/estado", estado)
     app.router.add_get("/api/quadro", quadro)
     app.router.add_get("/api/janelas", janelas)
@@ -244,6 +281,7 @@ def iniciar(nucleo, porta):
         runner = web.AppRunner(app, access_log=None)
         laco.run_until_complete(runner.setup())
         laco.run_until_complete(web.TCPSite(runner, "127.0.0.1", porta).start())
+        nucleo.sala.publicar(porta)        # a Sala 3D acha o Voz Universal por este arquivo
         laco.run_forever()
 
     threading.Thread(target=rodar, daemon=True).start()
