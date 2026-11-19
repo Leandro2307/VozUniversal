@@ -101,6 +101,11 @@ PADRAO = {
     "memoria_s": 8,
     "interromper_ao_avancar": False,   # False: a fala anterior acelera para alcancar (nao corta)
     "acelerar_ate": 1.35,
+    "legenda_altura_min": 0.62,    # so le legenda com o meio abaixo desta altura do video (embaixo, no centro)
+    "ler_texto_tela": False,       # texto escrito na cena (celular, carta): desligado, so legendas
+    "pular_atual_apos": 3,         # legendas atras para cortar a que toca (3 encavaladas: pula so a do meio)
+    "pular_atrasada_s": 3.0,       # fala que ainda nao comecou, com legenda mais nova esperando, so e pulada
+                                   # se ja estiver este tanto atrasada (0: nunca pula por atraso)
     "tolerancia_fim_s": 1.0,
     "acelerar_se_atrasado": True,
     "xtts_pedacos": [8, 12, 20, 32],   # tamanho dos pedacos gerados: comeca pequeno (rapido) e cresce (sem buracos)

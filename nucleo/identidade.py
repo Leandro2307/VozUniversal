@@ -142,6 +142,14 @@ def palpite_nome(palavra):
     return None
 
 
+def nome_valido(nome):
+    """O nome (1 palavra) existe de verdade: esta em recursos\\nomes.txt ou entre os ~100 mil nomes do
+    IBGE/EUA ("Connie", "Antonia", "Stefanie"). Lido assim, nao e erro de OCR de outro nome."""
+    _carregar_auto()
+    p = _palavra(nome)
+    return len(p) >= 2 and (p in _AUTO or p in nomes_proprios())
+
+
 def sexo_do_nome(nome):
     """Sexo de um nome proprio CONHECIDO: "Catherine" -> "f". Senao "".
     Primeiro recursos\nomes.txt (o usuario manda), depois os nomes do IBGE/EUA quando quase
@@ -196,6 +204,10 @@ def pistas_nome(nome):
                  f"“{p0.title()}” tem terminação de nome {gen} ({cert * 100:.0f}%)")]
     # palavras femininas na gramatica mas que servem pra homem e mulher: sem pista nenhuma
     if sem_acento(p0) in _NEUTRAS:
+        return saida
+    # "-ista" serve para os dois ("Motorista", "Turista", "Jornalista"): antes contava como palavra
+    # masculina (18/11: "Motorista → Homem [“motorista” é palavra masculina]")
+    if re.search(r"istas?$", p0):
         return saida
     if _FEM_SUFIXO.search(p0) and len(p0) > 3:
         saida.append(("s", "f", 1.4, f"“{p0}” é palavra feminina"))

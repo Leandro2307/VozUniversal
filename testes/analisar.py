@@ -90,6 +90,11 @@ def resumo(ev, desde=0.0, ate=1e9):
         out.append(f"SISTEMA (último): RAM livre {s['ram_livre_gb']} GB | VRAM livre {s['vram_livre_gb']} GB | CPU {s['cpu_total']}% | "
                    f"programa {s['programa_mb']} MB | OCR {s['ocr_medio_ms']} ms/leitura, {s['leituras_por_s']} leituras/s")
     at = [e["atraso_ms"] for e in por["tocar_inicio"]]
+    # atraso descontando as frases anteriores da MESMA legenda (a 2a frase so pode comecar depois da
+    # 1a): e o que decide acelerar. So existe nas sessoes a partir de 19/11
+    at_ideal = [e["atraso_ideal_ms"] for e in por["tocar_inicio"] if "atraso_ideal_ms" in e]
+    novas = [inicio[i]["atraso_ms"] for i, f in falas.items() if f.get("nova") and i in inicio]
+    cont = [i for i, f in falas.items() if not f.get("nova") and i in inicio]
     todos_bur = [m for l in bur.values() for m in l]
     out.append("")
     out.append("RESUMO")
@@ -97,8 +102,15 @@ def resumo(ev, desde=0.0, ate=1e9):
     out.append(f"  falas .................. {len(falas)} (tocaram {len(inicio)})")
     if at:
         out.append(f"  atraso até o som ....... mediana {st.median(at):.0f} ms | média {st.mean(at):.0f} ms | pior {max(at)} ms")
+    if novas:
+        out.append(f"    1a frase da legenda .. mediana {st.median(novas):.0f} ms ({len(novas)} falas)")
+    if at_ideal:
+        out.append(f"    descontando a frase anterior da mesma legenda: mediana {st.median(at_ideal):.0f} ms | pior {max(at_ideal)} ms")
     out.append(f"  buracos (picotado) ..... {len(todos_bur)} em {len(bur)} falas, total {sum(todos_bur)} ms")
-    out.append(f"  aceleradas ............. {len(acel)}")
+    out.append(f"  aceleradas ............. {len(acel)} (continuação da mesma legenda: "
+               f"{sum(1 for i in cont if acel.get(i))} de {len(cont)})")
+    if por["pulou_meio"]:
+        out.append(f"  puladas por atraso ..... {len(por['pulou_meio'])} (legenda mais nova já esperando)")
     return "\n".join(out)
 
 

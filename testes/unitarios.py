@@ -15,7 +15,7 @@ except Exception:
 
 from nucleo.identidade import pistas_nome, pistas_texto           # noqa: E402
 from nucleo.leitor import dividir_frases                          # noqa: E402
-from nucleo.tela import (Dicionario, caixa_alta, eh_interface, juntar_mesma_linha, limpar,  # noqa: E402
+from nucleo.tela import (Dicionario, achar_legenda, caixa_alta, eh_interface, juntar_mesma_linha, limpar,  # noqa: E402
                          lixo_ocr, rotulos, separar_nome, DICA_CONTROLE)
 from nucleo.vozes import MotorClonada, preparar_fala               # noqa: E402
 
@@ -319,6 +319,118 @@ for t, esperado in [("o roblema de lidar", "o problema de lidar"), ("com as esso
     confere(f"letra perdida {t!r}", dic.consertar(t), esperado)
 confere("outra leitura viu a 1a letra", dic.fundir("osso disfarce vai ser", "Nosso disfarce vai ser"),
         "Nosso disfarce vai ser")
+
+# ---- sessao de 18/11 (GTA 6 no PS5, 2h16): casos reais
+# marcacao de idioma com o "[" lido como letra/numero, e no meio da legenda
+for t, esperado in [("I Espanhol Um café, por favor.", "Um café, por favor."),
+                    ("3 Espanhol Esses filhotes são maiores que um pitbull.", "Esses filhotes são maiores que um pitbull."),
+                    ("Espanhol Bom dia.4 Espanhol Bom did.", "Bom dia. Bom did."),
+                    ("Ele fala espanhol. Eu não.", "Ele fala espanhol. Eu não."), ("Inglês? Não falo.", "Inglês? Não falo.")]:
+    confere(f"idioma {t[:25]!r}", limpar(t), esperado)
+# virgula grudada no meio da palavra
+for t, esperado in [("Agora não, t,á?", "Agora não, tá?"), ("Droga, eu devia ter pedido r,nais.", "Droga, eu devia ter pedido mais."),
+                    ("A gen,te vai só o quê?", "A gente vai só o quê?"), ("Custa 1,5 mil.", "Custa 1,5 mil."),
+                    ("Suba em todas elas evocê,revelará o mapa.", "Suba em todas elas e você, revelará o mapa.")]:
+    confere(f"virgula {t[:25]!r}", dic.consertar(t), esperado)
+# cargo com 2a palavra minuscula no meio da legenda (era falado na voz de quem falou antes)
+for t, esperado in [("Foi pega por multa de trânsito com dois baseados. Policial penal: Melendez, não me vem com essa cara.",
+                     ("Policial penal", "Melendez, não me vem com essa cara.")),
+                    ("Dinheiro no balcão, agora, porra!' Pessoa local: Que bairro de merda.", ("Pessoa local", "Que bairro de merda.")),
+                    ('adam smith a san hages "benta gatei Pessoa desconhecida: Ok, acho que tá tudo bem.',
+                     ("Pessoa desconhecida", "Ok, acho que tá tudo bem.")),
+                    ("Presta atenção: isso é sério.", ("", "Presta atenção: isso é sério.")),
+                    ("Eu falei com o Gerente: ele disse que não.", ("", "Eu falei com o Gerente: ele disse que não.")),
+                    ("Lembra disso: nada de gracinha.", ("", "Lembra disso: nada de gracinha."))]:
+    nm, corpo = separar_nome([L(t)])
+    confere(f"cargo no meio {t[:30]!r}", (nm, " ".join(c[0] for c in corpo)), esperado)
+confere("linha de baixo comeca com cargo", separar_nome([L("Foi pega por multa.", y=0), L("Policial penal: Mãos na parede.", y=30)])[0],
+        "Policial penal")
+
+# aviso/texto legal comprido e creditos em ingles nao sao legenda; legenda comprida de verdade e
+from PIL import Image as _Img   # noqa: E402
+_img = _Img.new("RGB", (1300, 300))
+
+
+def _bloco(t, y=200):
+    return [(t, 650 - len(t) * 3, y, 650 + len(t) * 3, y + 24)]
+
+
+_legal = ("1997 - 2026. Rockstar Games, Grand Theft Auto, Grand Theft Auto VI, VI, Vice City e logotipos relacionados são "
+          "marcas comerciais e direitos autorais da Take-Two Interactive Software, Inc. Todas as outras marcas comerciais "
+          "pertencem aos seus respectivos donos. Todos os direitos reservados.")
+confere("texto legal comprido", achar_legenda(_img, linhas=_bloco(_legal), dic=dic), None)
+confere("creditos em ingles", achar_legenda(_img, linhas=_bloco("den11ifen xalbe manx adam san dan dan chew Rowan haa,i nab spampmara"),
+                                            dic=dic), None)
+_farcry = ("Vá, use as torres para mapear a ilha e localizar seus homens. Os encriptadores bloqueiam o acesso. "
+           "Nosso povo não está interessado nesses dispositivos.")
+confere("legenda comprida de verdade", bool(achar_legenda(_img, linhas=_bloco(_farcry), dic=dic)), True)
+
+# nome lido CERTO nao vira outro personagem parecido; erro de OCR continua sendo consertado
+class _PerfilGTA:
+    personagens = {k: {} for k in ["Jason", "Lucia", "Clarice", "Bonnie", "Kevin", "Antonio", "Stefanie Gates",
+                                   "Policial Daniels", "Cal", "Donnie", "Brian", "Pessoa local", "Isabella"]}
+
+
+_g = Nucleo.__new__(Nucleo)
+_g.perfil, _g.dic, _g.palavras_vistas = _PerfilGTA(), dic, {}
+for lido, certo in [("Cliente", "Cliente"), ("Connie", "Connie"), ("Antonia", "Antonia"), ("Isabelle", "Isabelle"),
+                    ("Stefanie", "Stefanie Gates"), ("Policial penal", "Policial penal"), ("Policial", "Policial"),
+                    ("Pessoas locais", "Pessoa local"), ("Cak", "Cal"), ("Lucjp", "Lucia"), ("Donoje", "Donnie"),
+                    ("Brjpn", "Brian"), ("D6nnie", "Donnie")]:
+    confere(f"nome GTA {lido}", _g._nome_canonico(lido), certo)
+# resto de nome cortado e letra solta no comeco da fala
+for f, esperado in [("ia: Só água.", "Só água."), ("lá: Vai na minha, ok?", "Vai na minha, ok?"),
+                    ("s Não, não, tá de boa.", "Não, não, tá de boa."), ("a gente vai", "a gente vai"),
+                    ("e Você?", "e Você?")]:
+    confere(f"comeco sujo {f!r}", _g._nome_na_fala(f)[1], esperado)
+
+# cargo "-ista" nao e masculino nem feminino
+confere("motorista sem sexo", [v for d, v, *_ in pistas_nome("Motorista") if d == "s"], [])
+
+# 2a frase da MESMA legenda nao acelera so por ter esperado a 1a tocar (18/11: 204 de 311 aceleradas)
+from nucleo.vozes import Narrador   # noqa: E402
+_nv = Narrador.__new__(Narrador)
+_nv.cfg = {"acelerar_ate": 1.35}
+_nv.pag, _nv.chegada, _nv.ideal_fim = 1, {}, {}
+_agora = _t.time()
+_nv.ideal_fim[1] = (_agora - 6.0) + 5.4          # legenda vista ha 6 s; a 1a frase tem 5,4 s de fala
+_info = {"visto": _agora - 6.0}
+_info["ideal"] = _nv._inicio_ideal(1, _info["visto"])
+confere("2a frase em dia nao acelera", _nv._ritmo_inicial(1, _info, 2.5), 1.0)
+_nv.ideal_fim[1] = (_agora - 6.0) + 2.0           # a legenda inteira esta 4 s atrasada: acelera
+_info["ideal"] = _nv._inicio_ideal(1, _info["visto"])
+confere("legenda atrasada acelera", _nv._ritmo_inicial(1, _info, 2.5) > 1.3, True)
+confere("fala nova: inicio ideal e quando apareceu", _nv._inicio_ideal(2, _agora - 1.0), _agora - 1.0)
+# a mesma fala lida de novo com 1-2 letras diferentes nao repete
+import collections as _col   # noqa: E402
+_nv.recentes = _col.deque(maxlen=12)
+confere("1a vez fala", _nv._repetido("Ei, essa... essa parece que tá certa."), False)
+confere("lida diferente nao repete", _nv._repetido("Ei, essas essa parece que tá certa."), True)
+confere("fala parecida mas outra frase", _nv._repetido("Eu não sei o que fazer agora."), False)
+confere("outra frase parecida", _nv._repetido("Ninguém sabe o que fazer agora."), False)
+
+# legendas encavaladas: a do MEIO so e pulada se ja estiver atrasada demais (pular sempre perdia 1 de
+# cada 7 falas numa conversa rapida, bateria do GTA 6 19/11)
+def _narrador_tocando(chegou_9_ha):
+    nv = Narrador.__new__(Narrador)
+    nv.cfg = {"pular_atrasada_s": 3.0, "pular_atual_apos": 3}
+    nv.tocando, nv.acabou_atual, nv.no_toque, nv.ult_fim_toque = 8, False, True, _t.time()
+    nv.pular_ate, nv.puladas, nv.ideal_fim = 0, set(), {}
+    agora = _t.time()
+    nv.chegada = {8: agora - 5.0, 9: agora - chegou_9_ha, 10: agora}
+    nv.pag = 10
+    nv._pular_meio()
+    return nv
+
+
+confere("do meio pouco atrasada fica", 9 in _narrador_tocando(0.6).puladas, False)
+confere("do meio atrasada demais e pulada", 9 in _narrador_tocando(3.4).puladas, True)
+_nv2 = _narrador_tocando(0.6)
+confere("a que toca nao e cortada com 2 atras", _nv2.pular_ate, 0)
+confere("na hora de tocar: atrasada com legenda nova esperando pula",
+        _nv2._atrasada_demais(9, {"visto": _t.time() - 3.5}), True)
+confere("na hora de tocar: pouco atrasada toca", _nv2._atrasada_demais(9, {"visto": _t.time() - 1.0}), False)
+confere("na hora de tocar: a mais nova nunca pula", _nv2._atrasada_demais(10, {"visto": _t.time() - 9.0}), False)
 
 print(f"{'TUDO CERTO' if not falhas else 'FALHAS'}: {len(falhas)} problema(s)")
 for f in falhas:

@@ -335,9 +335,15 @@ class Nucleo:
         n = normalizar(b)
         if n not in conhecidos and n in getattr(self, "palavras_vistas", {}) and b[:1].isupper():
             return b                       # escrito igual no meio de uma fala: e nome de verdade
-        from .identidade import nomes_proprios
+        from .identidade import nome_valido, nomes_proprios
+        from .tela import _FREQ
         lista_nomes = nomes_proprios()
-        if n in conhecidos and (n in lista_nomes or len(n) < 4):
+        # lido CERTO nao e erro de OCR de outro parecido (18/11: "Connie" virava a "Bonnie", "Antonia"
+        # o "Antonio" (voz de homem), "Stefanie" a "Stephanie" e "Cliente" (o freguês) a "Clarice",
+        # com voz de mulher): nome que existe com 6+ letras, ou palavra comum do portugues (cargo)
+        protegido = b[:1].isupper() and len(n) >= 5 and (
+            (len(n) >= 6 and nome_valido(n)) or (_FREQ.get(b.lower(), 0) >= 1000 and not nome_valido(n)))
+        if n in conhecidos and (n in lista_nomes or len(n) < 4 or protegido):
             return conhecidos[n]
         if n in conhecidos:
             # personagem que ficou salvo com o nome estragado ("Allhur"): se parece muito com um
@@ -349,10 +355,18 @@ class Nucleo:
             return conhecidos[n]
         if n not in conhecidos and n in lista_nomes and len(n) >= 4:
             return b[:1].upper() + b[1:]   # nome proprio certo ("Lenny") nao vira outro parecido ("Leon")
+        # so o 1o nome de quem ja apareceu com sobrenome ("Stefanie" logo depois de "Stefanie Gates",
+        # 18/11: viraram duas fichas, com vozes diferentes). Cargo ("Policial" x "Policial Daniels") nao
+        if " " not in b and nome_valido(n):
+            donos = [k for k in conhecidos.values() if " " in k.strip() and normalizar(k.split()[0]) == n]
+            if len(donos) == 1:
+                return donos[0]
+        if protegido:
+            return b
         # erro de OCR no nome ("Dulch", "Ljutch" -> Dutch; "Anhur" -> Arthur): 1o os personagens
         # que ja apareceram, depois a lista de nomes proprios
         perto = difflib.get_close_matches(n, list(conhecidos), n=1, cutoff=0.72)
-        if perto:
+        if perto and self._pode_ser_o_mesmo(b, conhecidos[perto[0]]):
             return conhecidos[perto[0]]
         def inicial(x):
             return "l" if x[:1] in "il1" else x[:1]
@@ -370,7 +384,7 @@ class Nucleo:
                             for k in parecidos), reverse=True)
             if notas[0][0] >= 0.75 and notas[0][0] - notas[1][0] >= 0.15:
                 parecidos = [notas[0][1]]
-        if len(parecidos) == 1:
+        if len(parecidos) == 1 and self._pode_ser_o_mesmo(b, conhecidos[parecidos[0]]):
             diag.ev("nome_corrigido", lido=b, virou=conhecidos[parecidos[0]])
             return conhecidos[parecidos[0]]
         if len(n) >= 4:
@@ -384,11 +398,27 @@ class Nucleo:
                 folga = cands[0][0] - cands[1][0] if len(cands) > 1 else 1.0
                 if cands and ((cands[0][0] >= 0.62 and folga >= 0.1) or (cands[0][0] >= 0.7 and folga >= 0.07)):
                     perto = [cands[0][1]]
-            if perto and perto[0] != n:
+            if perto and perto[0] != n and self._pode_ser_o_mesmo(b, perto[0].title()):
                 certo = perto[0].title()
                 diag.ev("nome_corrigido", lido=b, virou=certo)
                 return certo
         return b
+
+    @staticmethod
+    def _pode_ser_o_mesmo(lido, cand):
+        """Corrigir o nome `lido` para `cand` faz sentido? Nunca troca o sexo de um nome que existe
+        ("Antonia" -> "Antonio") nem o complemento de um cargo ("Policial penal" -> "Policial
+        Daniels", "Pessoa local" -> "Pessoa desconhecida"): sao pessoas diferentes."""
+        from .identidade import sexo_do_nome
+        sa = sexo_do_nome(lido) if lido[:1].isupper() else ""
+        sb = sexo_do_nome(cand)
+        if sa and sb and sa != sb:
+            return False
+        pa, pb = lido.split(), cand.split()
+        if (len(pa) >= 2 and len(pb) >= 2 and normalizar(pa[0]) == normalizar(pb[0])
+                and semelhanca(normalizar(pa[1]), normalizar(pb[1])) < 0.6):
+            return False
+        return True
 
     def _olhar(self, sct, area, reg_frac):
         """Recortes da tela para o CLIP: a cena acima da caixa e o retrato ao lado do texto."""
@@ -607,8 +637,11 @@ class Nucleo:
             img = img.resize((int(img.width * esc), int(img.height * esc)), Image.LANCZOS)
             img = ImageOps.autocontrast(ImageOps.grayscale(img)).convert("RGB")
         motivos, textos_tela = [], []
-        bloco = achar_legenda(img, dic=self.dic, motivos=motivos, textos_tela=textos_tela)
-        if textos_tela:
+        # so a faixa da legenda (embaixo, no centro): o meio do bloco abaixo de "legenda_altura_min"
+        # da altura do video. Texto mais acima (placas, HUD, menus) nao e lido
+        y_min = (vy0 + float(self.cfg.get("legenda_altura_min", 0.62)) * (vy1 - vy0) - topo) * esc
+        bloco = achar_legenda(img, dic=self.dic, motivos=motivos, textos_tela=textos_tela, y_min=y_min)
+        if textos_tela and self.cfg.get("ler_texto_tela", False):
             # mensagem no celular / carta na cena: a legenda vem primeiro, o texto e lido depois
             b = max(textos_tela, key=lambda k: sum(len(l[0]) for l in k))
             bx0, bx1 = vx0 + min(l[1] for l in b) / esc, vx0 + max(l[3] for l in b) / esc
@@ -950,6 +983,11 @@ class Nucleo:
         (video pequeno): "susan; eu vou...", "lilly: Obrigada", "A: thur: Tá, vamos lá.",
         "Arthur agente matou..." (este so se o Arthur acabou de ser lido como quem fala).
         -> (nome, fala sem o nome) ou ("", fala)"""
+        # resto de um nome cortado pelo OCR ("Luc|ia: Só água.", "lá: Vai na minha...", "s: Porra, ele
+        # tá..."): 1-3 letras minusculas + ":" no comeco nunca sao fala (eram faladas, GTA 6 18/11).
+        # Consoante solta antes de uma Maiuscula tambem e sujeira ("s Não, não, tá de boa.")
+        fala = re.sub(r"^\W{0,2}[a-zà-ÿ]{1,3}\s*:\s+(?=\S)", "", fala)
+        fala = re.sub(r"^[bcdfghjklmnpqrstvwxz]\s+(?=[A-ZÀ-Ý])", "", fala)
         if not self.perfil or not self.perfil.personagens:
             return "", fala
         conhecidos = self.perfil.personagens

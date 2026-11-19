@@ -23,7 +23,7 @@ import numpy as np
 
 from .diagnostico import diag
 from .leitor import dividir_frases
-from .util import BANCO, PIPER_DIR, RECURSOS, log, normalizar, ler_json, gravar_json
+from .util import BANCO, PIPER_DIR, RECURSOS, log, normalizar, ler_json, gravar_json, semelhanca
 
 os.environ["COQUI_TOS_AGREED"] = "1"
 KOKORO = "kokoro:"                                # voz local "kokoro:pf_dora" = Kokoro, nao Piper
@@ -1365,11 +1365,20 @@ class Narrador:
         self.pag = 0              # numero da fala/legenda mais nova que chegou
         self.pular_ate = 0        # falas com numero menor que este ficaram atras demais: pula
         self.tocando = 0
-        self.seq = 0              # numero de cada fala (para o diagnostico)
+        self.puladas = set()      # falas do MEIO que encavalaram (3 em sequencia): nao tocam
+        self.no_toque = False     # escrevendo som agora
+        self.acabou_atual = True  # a fala `tocando` ja terminou de tocar
+        self.seq = 0             # numero de cada fala (para o diagnostico)
         self.ult_id = None
         self.ult_fim_toque = None
         self.gerando_fim = set()
         self.chegada = {}         # numero da fala -> quando ela apareceu
+        # legenda com 2+ frases vira 2+ falas (a 1a sai logo, as outras "continuam"). A 2a frase foi
+        # VISTA junto com a 1a, mas so pode comecar depois dela: medir o atraso dela desde a legenda
+        # aparecer contava a 1a frase inteira como atraso e ela saia acelerada 35% (sessao de 18/11:
+        # 204 de 311 continuacoes aceleradas, media +24%, em cima da velocidade 1,4 do config).
+        self.ideal_fim = {}       # legenda (pag) -> quando a fala dela acabaria se tivesse saido na hora
+        self.primeira_fid = {}    # legenda (pag) -> id da 1a fala dela (as outras sao continuacao)
         self.ritmo_fala = 1.0     # velocidade em que a fala atual esta tocando
         self.com_buraco = set()
         self.sem_buraco = 0
@@ -1451,10 +1460,16 @@ class Narrador:
         """nova=True: comecou uma fala/legenda nova.
 
         Sem cortar (padrao): a fala anterior ACELERA para alcancar e a nova entra logo depois, em
-        velocidade normal. Se ficar 2 falas atras, a mais velha e pulada (nao acumula atraso).
+        velocidade normal. Se encavalarem (uma tocando, outra esperando e chega a nova), a do MEIO so
+        e pulada se ja estiver atrasada demais: a que toca termina sem corte (ver _pular_meio).
         Com "interromper_ao_avancar": corta a anterior na hora (jeito antigo)."""
         self.seq += 1
         voz, tom, vel = self._voz_unica(voz, tom, vel)
+        if voz == "narrador":
+            # o narrador tem tom/ritmo proprios no banco (18/11: voz do Rogerio, tom 0.94, ritmo 1.03);
+            # quem chama passa 1.0/1.0, sem ficha de personagem para guardar isso
+            d = self.banco.vozes.get("narrador") or {}
+            tom, vel = tom * float(d.get("tom", 1.0)), vel * float(d.get("velocidade", 1.0))
         diag.ev("fala", id=self.seq, texto=texto, voz=voz, quem=quem, nova=nova,
                 espera_ms=round((time.time() - (visto or time.time())) * 1000))
         if nova:
@@ -1464,15 +1479,61 @@ class Narrador:
                 self.tol = float(self.cfg.get("tolerancia_fim_s", 1.0))
                 self.ger += 1
             else:
-                self.pular_ate = max(self.pular_ate, self.pag - 1)
+                self._pular_meio()
+        self.primeira_fid.setdefault(self.pag, self.seq)
+        if len(self.primeira_fid) > 60:
+            for p in [p for p in self.primeira_fid if p < self.pag - 30]:
+                self.primeira_fid.pop(p, None)
+                self.ideal_fim.pop(p, None)
         self.fila.put((self.ger, self.pag, texto, voz, tom, vel, quem, categoria, visto or time.time(), forcar, self.seq))
 
     def calar(self):
         self.tol = 0.0
         self.ger += 1
 
+    def _tocando_agora(self):
+        """A fala `tocando` ainda esta saindo no alto-falante (ou entre dois pedacos dela)."""
+        return bool(self.tocando) and not self.acabou_atual and (
+            self.no_toque or time.time() - (self.ult_fim_toque or 0) < 0.5)
+
+    def _pular_meio(self):
+        """Chegou a legenda nova (self.pag) com outras ainda na frente dela.
+        - Legenda do MEIO (esperando, ainda nao comecou) ja atrasada demais (`pular_atrasada_s`
+          desde que apareceu): e pulada inteira e a voz vai direto para o que esta na tela. Pouco
+          atrasada, fica: a anterior acelera e ela entra logo. (Pular SEMPRE a do meio perdia 1 de
+          cada 7 falas numa conversa rapida: "Me passa uma cerveja.", "Saúde!"; bateria do GTA 6,
+          19/11.) Na hora de comecar cada fala o _tocar confere de novo (_atrasada_demais).
+        - Se ainda assim a que toca ficou `pular_atual_apos` legendas atras (prende demais mesmo
+          acelerando), ela some suave."""
+        novo = self.pag
+        agora = time.time()
+        base = self.tocando if self._tocando_agora() else self.tocando + 1
+        pend = [p for p in range(max(base, self.pular_ate), novo) if p not in self.puladas]
+        if not pend:
+            return
+        atual = pend[0]
+        limite = float(self.cfg.get("pular_atrasada_s", 3.0))
+        meio = [p for p in pend[1:] if limite > 0 and agora - self.chegada.get(p, agora) >= limite]
+        for p in meio:
+            self.puladas.add(p)
+            diag.ev("pulou_meio", pag=p, tocando=atual, nova=novo, atraso_s=round(agora - self.chegada.get(p, agora), 2))
+        if meio:
+            log(f"⏭ Legendas encavaladas: pulei {len(meio)} atrasada(s) demais para alcançar a tela.", tipo="aviso")
+        if len([p for p in pend if p not in self.puladas]) >= int(self.cfg.get("pular_atual_apos", 3)):
+            self.pular_ate = max(self.pular_ate, atual + 1)
+        self.puladas = {p for p in self.puladas if p >= self.pular_ate and p > novo - 50}
+
+    def _atrasada_demais(self, pag, info):
+        """Na hora de COMECAR uma fala: ja tem legenda mais nova esperando e esta sairia
+        `pular_atrasada_s` atrasada (desde o inicio ideal, ver _inicio_ideal) -> pula inteira: o que
+        esta na tela agora ja e outra coisa."""
+        lim = float(self.cfg.get("pular_atrasada_s", 3.0))
+        if lim <= 0 or pag >= self.pag or not info.get("visto"):
+            return False
+        return time.time() - self._inicio_ideal(pag, info["visto"]) >= lim
+
     def _velha(self, ger, pag):
-        return ger != self.ger or pag < self.pular_ate
+        return ger != self.ger or pag < self.pular_ate or pag in self.puladas
 
     def _ajustar_pedacos(self, fid):
         """Auto-ajuste: se a fala teve buraco (picotou), o 1o pedaco cresce (mais folga); depois de
@@ -1517,12 +1578,19 @@ class Narrador:
         # maximo; a fila entre falas era a maior parte do atraso que sobrou (bateria 14/11)
         return min(float(self.cfg.get("acelerar_ate", 1.35)), 1.1 + (espera - 0.2) * 0.35)
 
+    def _inicio_ideal(self, pag, visto):
+        """Quando esta fala deveria comecar se tudo estivesse em dia: na hora em que apareceu ou, se
+        e continuacao da mesma legenda, quando a parte anterior acabaria (a 2a frase so comeca
+        depois da 1a, tambem na voz original)."""
+        return max(visto or time.time(), self.ideal_fim.get(pag, 0.0))
+
     def _ritmo_inicial(self, pag, info, dur):
         """Fala que ja COMECA atrasada (esperou a anterior terminar): ja sai um pouco mais rapida,
-        em vez de comecar normal e so acelerar quando a proxima chegar."""
+        em vez de comecar normal e so acelerar quando a proxima chegar. Atraso medido desde o
+        inicio IDEAL (_inicio_ideal), nao desde a legenda aparecer."""
         if not info or not info.get("visto") or dur < 0.6:
             return 1.0
-        atraso = time.time() - info["visto"]
+        atraso = time.time() - (info.get("ideal") or info["visto"])
         r = 1.0 if atraso < 1.3 else 1.0 + (atraso - 1.3) * 0.2
         return min(float(self.cfg.get("acelerar_ate", 1.35)), max(r, self._ritmo(pag, dur)))
 
@@ -1537,6 +1605,11 @@ class Narrador:
                 return True      # a mesma legenda de novo (piscou na tela): nao repete
             # pedaco de uma fala dita ha pouco (o OCR leu so um trecho dela): mesma ordem, 3+ palavras
             if agora - t0 <= 6 and len(pal) >= 3 and len(n) < len(n0) and n in n0:
+                return True
+            # a mesma fala lida de novo com 1-2 letras diferentes ("Ei, essa... essa parece que tá
+            # certa." e "Ei, essas essa parece que tá certa."; "s Não, não, tá de boa."): saia duas
+            # vezes seguidas (GTA 6, 18/11)
+            if agora - t0 <= 8 and min(len(n), len(n0)) >= 12 and semelhanca(n, n0) >= 0.9:
                 return True
         self.recentes.append((n, set(pal), agora))
         return False
@@ -1637,7 +1710,10 @@ class Narrador:
                     diag.ev("descartada", id=fid, motivo="ficou para trás enquanto ouvia a voz")
                     return
             voz, tom, vel = self._voz_unica(voz, tom, vel)   # a escuta pode ter trocado a voz
-            pressa = self._pressa(visto, pag)
+            # continuacao da mesma legenda: o "atraso" dela e a 1a frase tocando, nao pressa de
+            # verdade; se a legenda toda estiver atrasada, o _tocar acelera (inicio ideal)
+            continuacao = self.primeira_fid.get(pag, fid) != fid
+            pressa = 1.0 if continuacao else self._pressa(visto, pag)
             d = self.banco.vozes.get(voz, {})
             vel_base = vel * float(d.get("velocidade", 1.0)) * float(self.cfg.get("velocidade", 1.0))
             vel_total = vel_base * pressa
@@ -1921,12 +1997,20 @@ class Narrador:
             fid = (info or {}).get("id")
             if wav is None:                       # fim da fala: nao espera mais pedacos dela
                 self.gerando_fim.add(fid)
+                if pag == self.tocando:
+                    self.acabou_atual = True      # o ultimo pedaco dela ja tocou (fila em ordem)
                 diag.ev("tocar_fim", id=fid)
                 self._ajustar_pedacos(fid)
                 continue
             if self._velha(ger, pag):
                 continue
+            if info.get("primeiro") and self._atrasada_demais(pag, info):
+                self.puladas.add(pag)            # os outros pedacos (e o resto da legenda) tambem
+                diag.ev("pulou_meio", pag=pag, id=fid, nova=self.pag,
+                        atraso_s=round(time.time() - self._inicio_ideal(pag, info["visto"]), 2))
+                continue
             self.tocando = pag
+            self.acabou_atual = False
             agora = time.time()
             # BURACO: a fala ja tinha comecado, o pedaco anterior acabou de tocar e este ainda
             # nao tinha chegado -> silencio no meio da frase (o "picotado")
@@ -1960,18 +2044,25 @@ class Narrador:
             if sr != self.SR:                     # taxa unica: trocar de taxa reabre o audio e come o comeco
                 wav = np.interp(np.arange(0, len(wav), sr / self.SR), np.arange(len(wav)), wav).astype(np.float32)
                 sr = self.SR
+            dur_natural = len(wav) / sr           # duracao deste pedaco sem acelerar
             try:
                 if info:
+                    info["ideal"] = self._inicio_ideal(pag, info.get("visto"))
+                    self.ideal_fim[pag] = info["ideal"]
                     if info.get("visto"):
                         # atraso DE VERDADE: da legenda aparecer ate o som sair agora (com as falas
                         # geradas em paralelo, a fala fica pronta antes e espera a anterior acabar)
                         info["atraso_ms"] = round((time.time() - info["visto"]) * 1000)
-                    diag.ev("tocar_inicio", id=fid, atraso_ms=info["atraso_ms"], fila_audio=self.audio.qsize())
+                    # atraso_ideal: descontando as frases anteriores da MESMA legenda (o que conta
+                    # para acelerar; numa fala nova e igual ao atraso_ms)
+                    diag.ev("tocar_inicio", id=fid, atraso_ms=info["atraso_ms"],
+                            atraso_ideal_ms=round((time.time() - info["ideal"]) * 1000), fila_audio=self.audio.qsize())
                     self.falando = True
                     extra = f", +{round((info['pressa'] - 1) * 100)}%" if info.get("pressa", 1) > 1.01 else ""
                     log(f"🔊 [{info['quem']} · {info['voz_nome']}] {info['texto']}   "
                         f"(voz em {info['atraso_ms']} ms, {info['motor']}{extra})", tipo="fala")
                     self.aviso("falando", info)
+                self.ideal_fim[pag] = self.ideal_fim.get(pag, time.time()) + dur_natural
                 bloco = int(sr * 0.04)
                 i, n, terminar, ritmo = 0, len(wav), False, 1.0
                 # continua na velocidade em que o pedaco anterior DESTA fala terminou (sem vai-e-volta)
@@ -1984,6 +2075,7 @@ class Narrador:
                         wav = acelerar(wav, r0, sr)
                         n, ritmo = len(wav), r0
                         diag.ev("acelerou", id=fid, fator=round(r0, 2), inicio=True)
+                self.no_toque = True
                 while i < n:
                     if ger != self.ger and not terminar:
                         if (n - i) / sr <= self.tol:
@@ -1994,7 +2086,7 @@ class Narrador:
                             break
                     # ficou 2 falas atras: some suave e pula. Mas se falta menos de 1 s do pedaco, termina
                     # (15/11: cortou o "vamos saindo?" do fim com so 0,58 s faltando)
-                    if pag < self.pular_ate and (n - i) / sr > float(self.cfg.get("terminar_se_falta_s", 1.0)):
+                    if (pag < self.pular_ate or pag in self.puladas) and (n - i) / sr > float(self.cfg.get("terminar_se_falta_s", 1.0)):
                         fim = min(n, i + int(sr * 0.08))
                         self._escrever(wav[i:fim] * np.linspace(1, 0, fim - i, dtype=np.float32), sr)
                         log("⏭ Pulei o resto de uma fala que ficou muito atrás da tela.", tipo="aviso")
@@ -2011,6 +2103,8 @@ class Narrador:
                     self._escrever(wav[i:i + bloco], sr)
                     i += bloco
                 self.ult_id, self.ult_fim_toque, self.ritmo_fala = fid, time.time(), ritmo
+                self.no_toque = False
             except Exception as e:
+                self.no_toque = False
                 log("Erro ao tocar:", repr(e), tipo="erro")
                 time.sleep(0.5)

@@ -202,15 +202,15 @@
   "narrador": {
     "nome": "Narrador",
     "categoria": "narrador",
-    "descricao": "textos sem nome (itens, avisos, placas)",
-    "tom": 1.0,
-    "velocidade": 1.05,
+    "descricao": "textos sem nome (itens, avisos, placas) — voz do Rogério, tom 0.94 e ritmo 1.03 (18/11)",
+    "tom": 0.94,
+    "velocidade": 1.03,
     "rapida": {
       "motor": "edge",
-      "voz": "pt-BR-AntonioNeural",
+      "voz": "en-US-BrianMultilingualNeural",
       "tom": 1.0,
       "reserva": {
-        "voz": "pt_BR-cadu-medium",
+        "voz": "pt_BR-razo-medium",
         "tom": 1.0
       }
     }

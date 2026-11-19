@@ -341,15 +341,22 @@ def limpar(t):
     t = re.sub(r"(?<![\w\d])01(?=[?!])", "Oi", t)
     # marcacao de idioma antes da fala ("[Espanhol] Vai, vai!" lido "Espanhol Vai, vai!"): nao e fala
     t = _RE_IDIOMA.sub("", t)
+    # ...tambem depois de uma frase, na mesma legenda ("Bom dia. [Espanhol] Bom dia.", 18/11)
+    t = _RE_IDIOMA_MEIO.sub(" ", t)
     # travessao solto grudado no comeco de uma palavra no meio da frase ("então -só deixa"): lixo do
     # OCR. Hifen DENTRO da palavra ("viva-voz") e o travessao de dialogo ("- Ei. - Tipo") ficam
     t = re.sub(r"([^\W\d_][,;:]?\s)[-–—](?=[^\W\d_])", r"\1", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
-_RE_IDIOMA = re.compile(r"^[\s\[(\-–—]*(?i:em\s+)?(?i:espanhol|ingl[eê]s|franc[eê]s|italiano|alem[aã]o|russo|"
-                        r"japon[eê]s|chin[eê]s|[aá]rabe|coreano|portugu[eê]s|crioulo|haitiano|polon[eê]s|hebraico|latim)"
+_IDIOMAS = (r"(?i:espanhol|ingl[eê]s|franc[eê]s|italiano|alem[aã]o|russo|japon[eê]s|chin[eê]s|[aá]rabe|coreano|"
+            r"portugu[eê]s|crioulo|haitiano|polon[eê]s|hebraico|latim)")
+# o "[" as vezes sai como "I", "l", "|", "1" ou outro numero ("I Espanhol Um café", "3 Espanhol Esses
+# filhotes...", GTA 6 18/11): uma letra/numero solto antes do idioma tambem e o colchete
+_RE_IDIOMA = re.compile(r"^[\s\[(\-–—]*(?:[Il|\d]\s*)?(?i:em\s+)?" + _IDIOMAS +
                         r"[\s\])\-–—:]+(?=[\-–—\"'¿¡]*[A-ZÀ-Ý])[\-–—\s]*")
+_RE_IDIOMA_MEIO = re.compile(r"(?<=[.!?…])\s*[\[(]?(?:[Il|\d]\s*)?" + _IDIOMAS +
+                             r"[\s\])\-–—:]+(?=[\-–—\"'¿¡]*[A-ZÀ-Ý])")
 
 
 def isolar_contorno(img, lo=205, escuro=110, raio=7):
@@ -521,19 +528,25 @@ def palavra_que_e_fala(t):
     return False
 
 
+# texto sem "Nome:" maior que isto nao e legenda (aviso, texto legal, descricao de menu)
+LEGENDA_MAX = 250
+
+
 def eh_texto_de_tela(b):
     """Bloco com 4+ linhas: paragrafo escrito NA CENA (mensagem no celular, carta, bilhete), nao
     legenda (legenda tem no maximo 3 linhas)."""
     return len(b) >= 4 and len(limpar(" ".join(l[0] for l in b)).split()) >= 12
 
 
-def achar_legenda(img, linhas=None, dic=None, motivos=None, textos_tela=None):
+def achar_legenda(img, linhas=None, dic=None, motivos=None, textos_tela=None, y_min=None):
     """Na parte de baixo de um video, acha o bloco que e a LEGENDA: centralizado na horizontal
     (titulo de capitulo do YouTube, relogio e botoes ficam de lado), com cara de frase.
     Entre varios, fica com o que tem mais texto e esta mais embaixo. -> linhas do bloco ou None.
     motivos (lista): recebe (texto, por que foi descartado) de cada bloco, para o diagnostico.
     textos_tela (lista): recebe os blocos que sao texto escrito na cena (celular, carta): eles nao
-    competem com a legenda (antes o texto do celular, mais comprido, ganhava dela, 18/11)."""
+    competem com a legenda (antes o texto do celular, mais comprido, ganhava dela, 18/11).
+    y_min (pixels da imagem): so vale bloco com o meio abaixo disso (a faixa da legenda, embaixo
+    no centro); texto mais acima (placas, HUD, menus no meio da tela) nao e lido."""
     if linhas is None:
         linhas = [l for l in ocr_linhas(img) if len(re.findall(r"[^\W_]", l[0])) >= 2]
     w, h = img.size
@@ -554,12 +567,23 @@ def achar_legenda(img, linhas=None, dic=None, motivos=None, textos_tela=None):
             fora(t, "capitulo do YouTube")
             continue
         com_nome = bool(_PREFIXO.match(consertar_prefixo(b[0])[0]))
+        if y_min is not None and (min(l[2] for l in b) + max(l[4] for l in b)) / 2 < y_min:
+            fora(t, "acima da faixa da legenda")
+            continue                                   # legenda fica embaixo
         if eh_texto_de_tela(b) and not com_nome:
             fora(t, "texto na cena (celular/carta)")
             if textos_tela is not None:
                 textos_tela.append(b)
             continue
-        if abs((x0 + x1) / 2 / w - 0.5) > 0.12 and not com_nome:
+        if len(t) > LEGENDA_MAX and not com_nome:
+            # aviso de epilepsia, texto legal da produtora, descricao no menu do console: 23 a 72 s
+            # de fala que atrasaram as legendas seguintes em ate 18 s (18/11, 301 a 1059 letras).
+            # Legenda de verdade passa pouco de 200 (3 linhas compridas no Far Cry)
+            fora(t, "texto longo demais para legenda")
+            continue
+        # legenda e centralizada; "Nome: fala" tem um pouco mais de folga (o nome desloca o meio),
+        # mas texto encostado num lado (chat, HUD, lista) nunca e legenda
+        if abs((x0 + x1) / 2 / w - 0.5) > (0.25 if com_nome else 0.12):
             fora(t, "fora do centro")
             continue                                   # legenda e centralizada
         # menu de escolhas (Cyberpunk: "Fale sobre Westbrook" / "Quantos maridos..."): 3+ linhas
@@ -590,7 +614,13 @@ def achar_legenda(img, linhas=None, dic=None, motivos=None, textos_tela=None):
             continue
         if dic is not None and dic.ok:
             ruins, total = lixo_ocr(t, dic)
-            if total and ruins / total > 0.6 and total <= 6:
+            # linha comprida de creditos em ingles/embaralhada passando atras da cena ("den11ifen xalbe
+            # manx adam san dan dan chew Rowan...", 8 s de fala no GTA 6, 18/11): com 7+ palavras
+            # cai se metade for estranha (nas ~3500 leituras gravadas ate 18/11, legenda de verdade
+            # ficou abaixo de 40%; de 50% para cima era creditos, interface ou leitura ilegivel)
+            # (com ":" pode ter uma legenda "Nome: fala" no fim do bloco: o separar_nome tira o lixo)
+            if total and ((ruins / total > 0.6 and total <= 6)
+                          or (total > 6 and ruins / total >= 0.5 and ":" not in t)):
                 fora(t, f"lixo do OCR ({ruins}/{total} palavras estranhas)")
                 continue
         nota = len(t) + 40 * (max(l[4] for l in b) / h)
@@ -971,8 +1001,22 @@ class Dicionario:
         melhor = max(cands, key=lambda c: self.freq.get(c, 0))
         return melhor, self.freq.get(melhor, 0)
 
+    def _virgula_no_meio(self, texto):
+        """Virgula grudada entre letras (sujeira lida como virgula, ou o OCR comeu o espaco):
+        "gen,te" -> "gente", "t,á" -> "tá", "r,nais" -> "mais"; entre duas palavras que existem
+        ("você,revelará") ganha o espaco. Antes a voz parava no meio da palavra (GTA 6, 18/11)."""
+        def troca(m):
+            a, b = m.group(1), m.group(2)
+            junta = a + b
+            certa = self._rn_por_m(junta)
+            if certa != junta or self.conhece(junta) or len(a) == 1 or len(b) == 1:
+                return certa
+            return a + ", " + b
+        return re.sub(r"(?<![\w,])([^\W\d_]+),([^\W\d_]+)(?![\w])", troca, texto)
+
     def consertar(self, texto):
         out, inicio = [], True
+        texto = self._virgula_no_meio(texto)
         # "H" lido como "1--l"/"I-I" no meio da fala ("1--losea" -> "Hosea", "1--lobart" -> "Hobart")
         texto = re.sub(r"(?<![\w-])[1Il|]-{1,2}[lI|1](?=[a-zà-ÿ]{2})", "H", texto)
         texto = self._separar_texto(texto)
@@ -1017,6 +1061,27 @@ _PALAVRAS_NAO_NOME = {"sim", "nao", "não", "ok", "voltar", "sair", "continuar",
 
 _NOME_NO_MEIO = re.compile(r"[.!?…]\s+([A-ZÀ-Ý][\wÀ-ÿ'\-]{1,20}(?: [A-ZÀ-Ý][\wÀ-ÿ'\-]{1,20})?)\s*:\s+\S")
 _NOME_NO_MEIO_SOLTO = re.compile(r"\s([A-ZÀ-Ý][\wÀ-ÿ'\-]{1,20}):\s+\S")
+# cargo/papel como nome de quem fala, com a 2a palavra minuscula ("Policial penal:", "Pessoa local:",
+# "Pessoas locais:", "Pessoa desconhecida:" no GTA 6). No MEIO da linha, ate sem pontuacao antes
+# ("...pó. Policial penal: Melendez, não me vem com essa cara.", 18/11: era falado na voz da Shayna)
+# (a fala depois do ":" comeca com Maiuscula: "...com o Gerente: ele disse" e frase, nao legenda)
+_NOME_PAPEL_NO_MEIO = re.compile(r"(?:^|\s)([A-ZÀ-Ý][a-zà-ÿ]{2,14}(?: [a-zà-ÿ]{3,15})?(?: \d{1,2})?)\s*:\s+"
+                                 r"(?=[A-ZÀ-Ý\"'“«¿¡\-–—.…])")
+_PAPEIS = set("""pessoa pessoas policial policiais guarda guardas segurança seguranca atendente motorista
+ gerente cliente clientes turista turistas agente agentes oficial soldado soldados detento detenta detentos
+ detentas prisioneiro prisioneira presidiário presidiária presidiario presidiaria funcionário funcionária
+ vendedor vendedora garçom garçonete homem mulher homens mulheres garoto garota menino menina voz locutor
+ locutora repórter reporter apresentador apresentadora piloto médico médica enfermeiro enfermeira
+ transeunte pedestre vizinho vizinha gravação gravacao rádio radio operador operadora capanga membro
+ chefe recepcionista bandido bandida traficante criminoso criminosa""".split())
+
+
+def _eh_papel(nome):
+    """ "Policial penal", "Pessoas locais": cargo conhecido + palavra minuscula (nao e frase)."""
+    ps = nome.split()
+    return bool(ps) and ps[0].lower() in _PAPEIS and _nome_com_minuscula(nome)
+
+
 # palavras que vem antes de ":" mas NAO sao nome de quem fala
 _NAO_E_NOME = {"atencao", "atenção", "dica", "nota", "aviso", "objetivo", "missao", "missão", "capitulo",
                "capítulo", "parte", "fase", "local", "hora", "obs", "importante", "novo", "nova",
@@ -1216,12 +1281,15 @@ def separar_nome(linhas, zona_nome=None, tam=None):
                 from .identidade import nomes_proprios
                 if m2.group(1).lower() in nomes_proprios():
                     m_meio = m2
-        if m_meio and _cara_de_nome(m_meio.group(1)):
+        if not (m_meio and _cara_de_nome(m_meio.group(1))):
+            m_meio = next((m3 for m3 in _NOME_PAPEL_NO_MEIO.finditer(txt)
+                           if m3.start(1) > 0 and _eh_papel(m3.group(1))), None)
+        if m_meio:
             linhas = [(txt[m_meio.start(1):],) + tuple(linhas[i][1:])] + list(linhas[i + 1:])
             break
         if i > 0:
             m2 = _PREFIXO.match(txt)
-            if m2 and _cara_de_nome(m2.group(1)):
+            if m2 and (_cara_de_nome(m2.group(1)) or _eh_papel(m2.group(1))):
                 linhas = list(linhas[i:])
                 break
     primeira = linhas[0]
@@ -1241,7 +1309,11 @@ def separar_nome(linhas, zona_nome=None, tam=None):
     m = _PREFIXO.match(primeira[0])
     if m and m.group(2)[:1].isdigit():
         m = None                       # "São 10:30 da manhã": horario, nao "Nome: fala"
-    if m and (_cara_de_nome(m.group(1)) or (_nome_com_minuscula(m.group(1)) and not palavra_comum(m.group(1)))):
+    # nome com 2a palavra minuscula ("Pessoa desconhecida") so com a fala comecando em Maiuscula, ou
+    # cargo conhecido: "Presta atenção: isso é sério." e "Lembra disso: nada..." sao fala, nao nome
+    if m and (_cara_de_nome(m.group(1)) or (_nome_com_minuscula(m.group(1)) and not palavra_comum(m.group(1))
+                                            and (m.group(2)[:1].isupper() or m.group(2)[:1] in "\"'“«-–—¿¡…."
+                                                 or _eh_papel(m.group(1))))):
         resto = (m.group(2),) + tuple(primeira[1:])
         return m.group(1).strip(), [resto] + linhas[1:]
     # lixo antes do nome ("' hornas l)ownes: Eu nao tenho nada."): tenta so a ultima palavra
