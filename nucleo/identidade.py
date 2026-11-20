@@ -423,8 +423,9 @@ def pistas_voz(res):
         return []
     p_m = float(res.get("p_m", 0.5))
     chance = p_m if res["sexo"] == "m" else 1 - p_m
+    hz = f", {res['f0']:.0f} Hz" if res.get("f0") else ""
     saida = [("s", res["sexo"], round(3.0 * res["certeza"], 2),
-              f"voz original {'masculina' if res['sexo'] == 'm' else 'feminina'} ({chance * 100:.0f}%)")]
+              f"voz original {'masculina' if res['sexo'] == 'm' else 'feminina'} ({chance * 100:.0f}%{hz})")]
     if res.get("crianca", 0) >= 0.5 and res["certeza"] >= 0.4:
         saida.append(("i", "crianca", round(1.5 * res["crianca"], 2),
                       f"voz original de criança ({res['crianca'] * 100:.0f}%)"))
@@ -472,12 +473,27 @@ class Elenco:
             return conf_sexo
         return conf
 
-    def _voz_para(self, nome, categoria):
+    def _voz_para(self, nome, categoria, f0=None):
         """Escolhe a voz da categoria menos usada no jogo e uma variacao de tom/ritmo que
-        ninguem usa ainda com essa voz -> nunca dois personagens com a mesma voz."""
+        ninguem usa ainda com essa voz -> nunca dois personagens com a mesma voz.
+        f0 (tom da voz ORIGINAL do jogo, Hz): entre as menos usadas, a de tom mais parecido, com um
+        ajuste fino de ate +-5% para chegar mais perto."""
         vozes = self.banco.da_categoria(categoria)
         if not vozes:
             return None, 1.0, 1.0
+        tom_de = getattr(self.banco, "tom", lambda _v: None)
+        if f0:
+            pers0 = self.perfil.personagens
+            uso0 = {v: 0 for v in vozes}
+            for n, f in pers0.items():
+                if n != nome and f.get("voz") in uso0:
+                    uso0[f["voz"]] += 100 if time.time() - f.get("ultima_t", 0) < 180 else 1
+            menor0 = min(uso0.values())
+            medidas = [v for v in vozes if uso0[v] == menor0 and tom_de(v)]
+            if medidas:
+                voz = min(medidas, key=lambda v: abs(math.log(tom_de(v) / f0)))
+                tom = round(max(TOM_AUTO[0], min(TOM_AUTO[1], f0 / tom_de(voz))), 2)
+                return voz, tom, 1.0
         pers = self.perfil.personagens
         uso = {v: 0 for v in vozes}
         usadas = set()
@@ -587,7 +603,10 @@ class Elenco:
             g = sexo_do_nome(nome)
             if g:
                 pistas = [pp for pp in pistas if not (pp[0] == "s" and pp[1] != g)]
+            f0m = self._registrar_tom(f, res)
             if not pistas:
+                if f0m and self._trocar_por_tom(nome, f, f0m):
+                    self.perfil.salvar()
                 return f
             f["ouvidas"] = f.get("ouvidas", 0) + 1
             pontos = f.setdefault("pontos", {})
@@ -606,7 +625,11 @@ class Elenco:
                     log(f"🎧 {nome}: pela voz original parece {ROTULOS[cat].lower()} "
                         f"(antes {ROTULOS[f['categoria']].lower()}).")
                 f["categoria"] = cat
-                f["voz"], f["tom"], f["vel"] = self._voz_para(nome, cat)
+                f["voz"], f["tom"], f["vel"] = self._voz_para(nome, cat, f0m)
+                if f0m:
+                    f["voz_por_tom"] = True
+            elif f0m:
+                self._trocar_por_tom(nome, f, f0m)
             try:
                 from .diagnostico import diag
                 diag.ev("ficha_voz", nome=nome, categoria=f["categoria"], voz=f["voz"], confianca=f["confianca"],
@@ -616,7 +639,55 @@ class Elenco:
             self.perfil.salvar()
             return f
 
-    def anonimo(self, categoria):
+    @staticmethod
+    def _registrar_tom(f, res):
+        """Guarda o tom (Hz) da voz original ouvida nesta fala e devolve a mediana das ultimas."""
+        f0 = (res or {}).get("f0")
+        if f0 and (res or {}).get("voz_s", 0) >= 0.5:
+            f["tons_orig"] = ((f.get("tons_orig") or []) + [round(f0, 1)])[-6:]
+        tons = f.get("tons_orig") or []
+        return sorted(tons)[len(tons) // 2] if tons else None
+
+    def _trocar_por_tom(self, nome, f, f0):
+        """Personagem novo (ate a 3a fala, uma vez so): voz do banco com o tom mais parecido com o da
+        voz original. Depois disso a voz nao muda mais (trocar no meio da cena confunde)."""
+        if f.get("fixo") or f.get("voz_por_tom") or f.get("falas", 0) > 3:
+            return False
+        voz, tom, vel = self._voz_para(nome, f.get("categoria"), f0)
+        f["voz_por_tom"] = True
+        if voz and (voz, tom) != (f.get("voz"), f.get("tom")):
+            f["voz"], f["tom"], f["vel"] = voz, tom, vel
+            v = self.banco.vozes.get(voz, {})
+            log(f"🎚 {nome}: voz original ~{f0:.0f} Hz → voz {v.get('nome', voz)} "
+                f"(~{getattr(self.banco, 'tom', lambda _v: 0)(voz) or 0:.0f} Hz, tom {tom:.2f})")
+        return True
+
+    def variante(self, quem, categoria, f0=None):
+        """Nome generico usado por gente diferente ("Pessoa desconhecida" homem E mulher no GTA 6):
+        a escuta ouviu o sexo OPOSTO ao da ficha -> ficha "Pessoa desconhecida (mulher)" com voz propria."""
+        with self.trava:
+            pers = self.perfil.personagens
+            nome = f"{quem} ({'mulher' if _sexo_da_categoria(categoria) == 'f' else 'homem'})"
+            novo = nome not in pers
+            f = pers.setdefault(nome, {"categoria": categoria, "voz": None, "tom": 1.0, "vel": 1.0,
+                                       "confianca": 1.0, "fixo": False, "pistas": ["voz original"], "pontos": {},
+                                       "falas": 0, "olhadas": 0, "variante_de": quem,
+                                       "primeira_vez": time.strftime("%d/%m %H:%M")})
+            f["falas"] = f.get("falas", 0) + 1
+            f["ultima_t"] = f["ultima_vez"] = time.time()
+            if f0:
+                f["tons_orig"] = ((f.get("tons_orig") or []) + [round(f0, 1)])[-6:]
+            if not f.get("voz") or f["voz"] not in self.banco.vozes:
+                f["voz"], f["tom"], f["vel"] = self._voz_para(nome, f["categoria"], f0)
+                f["voz_por_tom"] = bool(f0)
+            if novo:
+                v = self.banco.vozes.get(f["voz"], {})
+                log(f"🎧 {quem}: essa voz é de {'mulher' if _sexo_da_categoria(categoria) == 'f' else 'homem'} "
+                    f"→ {nome}, voz {v.get('nome', f['voz'])}", tipo="novo")
+            self.perfil.salvar()
+            return nome, f
+
+    def anonimo(self, categoria, f0=None):
         """Fala SEM nome (legenda de GTA, filme...) em que a voz original foi reconhecida -> ficha
         "Homem (pela voz)", "Mulher (pela voz)"... com voz propria (diferente dos personagens com
         nome que estao na cena). Corrigindo no painel, a correcao vale para as proximas."""
@@ -631,7 +702,7 @@ class Elenco:
             f["falas"] = f.get("falas", 0) + 1
             f["ultima_t"] = f["ultima_vez"] = time.time()
             if not f.get("voz") or f["voz"] not in self.banco.vozes:
-                f["voz"], f["tom"], f["vel"] = self._voz_para(nome, f["categoria"])
+                f["voz"], f["tom"], f["vel"] = self._voz_para(nome, f["categoria"], f0)
             if novo:
                 v = self.banco.vozes.get(f["voz"], {})
                 log(f"🎧 Voz original reconhecida: {nome} → voz {v.get('nome', f['voz'])}", tipo="novo")
@@ -657,6 +728,15 @@ class Elenco:
             f["confianca"] = 1.0
             self.perfil.salvar()
             return f
+
+    def trocar_voz_desligada(self, vid):
+        """A voz `vid` foi desligada no painel ("não usar"): os personagens que usavam ela (e nao
+        foram travados pelo usuario) ganham outra voz da mesma categoria."""
+        with self.trava:
+            for nome, f in self.perfil.personagens.items():
+                if f.get("voz") == vid and not f.get("fixo"):
+                    f["voz"], f["tom"], f["vel"] = self._voz_para(nome, f.get("categoria"))
+            self.perfil.salvar()
 
     def esquecer(self, nome):
         with self.trava:

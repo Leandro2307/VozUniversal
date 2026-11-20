@@ -160,6 +160,31 @@ def semelhanca(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
 
 
+def tom_hz(x, sr):
+    """Altura media da voz (Hz, mediana do F0 nos trechos com fala) ou None. Homem fica por volta de
+    85-160 Hz, mulher 165-260 Hz. Usado para dar a cada personagem a voz do banco com o tom mais
+    parecido com o da voz original do jogo (e para medir as amostras do banco)."""
+    import numpy as np
+    x = np.asarray(x, np.float32).reshape(-1)
+    if sr != 16000:
+        x = np.interp(np.arange(0, len(x), sr / 16000), np.arange(len(x)), x).astype(np.float32)
+    if len(x) < 16000 * 0.4:
+        return None
+    try:
+        import librosa
+        f0 = librosa.yin(x, fmin=65, fmax=450, sr=16000, frame_length=1024, hop_length=256)
+        rms = librosa.feature.rms(y=x, frame_length=1024, hop_length=256)[0]
+    except Exception:
+        return None
+    n = min(len(f0), len(rms))
+    f0, rms = f0[:n], rms[:n]
+    if not n or rms.max() <= 0:
+        return None
+    ok = (rms > np.percentile(rms, 40)) & (f0 > 66) & (f0 < 440)    # so os quadros com voz forte
+    vals = f0[ok]
+    return round(float(np.median(vals)), 1) if len(vals) >= 8 else None
+
+
 # A escuta, a visao e a voz clonada importam o `transformers` em threads diferentes; ao mesmo tempo,
 # a importacao preguicosa dele falhava (ImportError "cannot import name 'Wav2Vec2Config'", 20:25).
 TRAVA_IMPORTACAO = threading.RLock()

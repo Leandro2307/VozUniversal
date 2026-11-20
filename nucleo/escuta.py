@@ -444,6 +444,11 @@ def analisar(x, ouvido, vad, limiar=0.25):
     res["voz_s"] = round(len(fala) / SR, 2)
     if res["voz_s"] < 0.3:
         return res
+    try:
+        from .util import tom_hz
+        res["f0"] = tom_hz(fala, SR)      # tom da voz original (Hz): escolhe a voz do banco mais parecida
+    except Exception:
+        res["f0"] = None
     r = ouvido.classificar(fala)
     if not r:
         return res

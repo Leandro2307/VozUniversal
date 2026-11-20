@@ -232,7 +232,11 @@ def iniciar(nucleo, porta):
             n.avisar_estado()
         elif nome == "voz":
             v = n.banco.editar(d["id"], nome=d.get("nome"), descricao=d.get("descricao"),
-                               tom=d.get("tom"), velocidade=d.get("velocidade"))
+                               tom=d.get("tom"), velocidade=d.get("velocidade"), desligada=d.get("desligada"))
+            if d.get("desligada") and n.elenco:
+                # quem usava a voz desligada ganha outra na hora (as fichas travadas pelo usuario ficam)
+                n.elenco.trocar_voz_desligada(d["id"])
+                n.emitir("personagens", n.personagens())
             n.avisar_estado()
             return web.json_response({"ok": bool(v)})
         else:

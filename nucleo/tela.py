@@ -793,7 +793,8 @@ def palavra_comum(t):
 
 class Dicionario:
     TROCAS = [("ri", "n"), ("rn", "m"), ("m", "rn"), ("ii", "n"), ("cl", "d"), ("vv", "w"),
-              ("1", "l"), ("0", "o"), ("I", "l"), ("l", "I"), ("l", "i"), ("i", "l")]
+              ("1", "l"), ("0", "o"), ("I", "l"), ("l", "I"), ("l", "i"), ("i", "l"),
+              ("e", "c"), ("c", "e")]          # "fiea atrás de mim" = "fica" (GTA 6, 18/11)
     ACENTOS = {"a": "áãâà", "e": "éê", "i": "í", "o": "óõô", "u": "ú", "c": "ç"}
 
     def __init__(self):
@@ -851,6 +852,42 @@ class Dicionario:
         """b e a palavra a com uma letra a mais no comeco (o OCR comeu a 1a letra em a)."""
         na, nb = normalizar(a), normalizar(b)
         return len(nb) == len(na) + 1 and nb[1:] == na and nb[:1].isalpha()
+
+    _SEM_ACENTO = None      # palavra sem acento -> (palavra mais comum com essa grafia, frequencia)
+
+    def acento_estranho(self, tok):
+        """Acento/letra que nao existe ali ("nâda", "çom", "maño", "engraçadõ", GTA 6 18-20/11): se a
+        palavra nao existe mas SEM os acentos e uma palavra comum, fica a grafia certa dela."""
+        from .util import sem_acento
+        m = re.match(r"^(\W*)(.*?)(\W*)$", tok, re.S)
+        ini, miolo, fim = m.groups()
+        if len(miolo) < 3 or not re.search(r"[^\x00-\x7f]", miolo) or self.conhece(miolo):
+            return tok
+        if Dicionario._SEM_ACENTO is None:
+            idx = {}
+            for w, f in self.freq.items():
+                s = sem_acento(w)
+                if f > idx.get(s, ("", 0))[1]:
+                    idx[s] = (w, f)
+            Dicionario._SEM_ACENTO = idx
+        certo, f = Dicionario._SEM_ACENTO.get(sem_acento(miolo.lower()), ("", 0))
+        if not certo or f < 500 or certo == miolo.lower():
+            return tok
+        if miolo[:1].isupper():
+            certo = certo[:1].upper() + certo[1:]
+        return ini + certo + fim
+
+    def letra_tripla(self, tok):
+        """ "porrra" -> "porra", "nãããão" fica (grito de verdade so se a palavra nao existir mesmo)."""
+        m = re.match(r"^(\W*)(.*?)(\W*)$", tok, re.S)
+        ini, miolo, fim = m.groups()
+        if not re.search(r"(\w)\1\1", miolo):
+            return tok
+        for c in (re.sub(r"(\w)\1\1+", r"\1\1", miolo), re.sub(r"(\w)\1\1+", r"\1", miolo)):
+            # (3+ letras: "kkkk" virava "k" e "AAA" virava "AA": risada e grito ficam)
+            if len(c) >= 3 and self.freq.get(c.lower(), 0) >= 500:
+                return ini + c + fim
+        return tok
 
     def letra_perdida(self, tok):
         """Palavra que nao existe e que, com UMA letra a mais no comeco, e palavra comum: o OCR comeu
@@ -1029,6 +1066,10 @@ class Dicionario:
                 novo = self.acentuar(tok)
             if novo == tok and not self.conhece(tok):
                 novo = self.letra_perdida(tok)
+            if novo == tok and not self.conhece(tok):
+                novo = self.acento_estranho(tok)
+            if novo == tok and not self.conhece(tok):
+                novo = self.letra_tripla(tok)
             if novo != tok:
                 out.append(novo)
                 inicio = tok[-1:] in FIM
@@ -1336,7 +1377,7 @@ def separar_nome(linhas, zona_nome=None, tam=None):
 
 
 # cargo no meio do bloco com o ":" estragado pelo OCR ("Pessoa loeal;. Que bairro...", 18/11)
-_PAPEL_TOLERANTE = re.compile(r"(?:^|\s)([A-ZÀ-Ý][a-zà-ÿ]{2,14}(?: [a-zà-ÿ]{3,15})?(?: \d{1,2})?)\s*[:;][.,]?\s+"
+_PAPEL_TOLERANTE = re.compile(r"(?:^|[\s\-–—])([A-ZÀ-Ý][a-zà-ÿ]{2,14}(?: [a-zà-ÿ]{3,15})?(?: \d{1,2})?)\s*[:;][.,]?\s+"
                               r"(?=[A-ZÀ-Ý\"'“«¿¡\-–—.…])")
 _PAPEL_2A = ("local", "locais", "desconhecida", "desconhecido", "desconhecidas", "desconhecidos", "penal")
 # figurante: gente da rua / multidao (fala de fundo, a primeira a ser pulada quando a voz atrasa)
@@ -1377,6 +1418,67 @@ def tirar_idioma(t):
     return _IDIOMA.sub("", t, count=1)
 
 
+_CORES = [(12, "vermelho"), (45, "laranja"), (65, "amarelo"), (90, "verde-limão"), (150, "verde"),
+          (195, "ciano"), (255, "azul"), (290, "roxo"), (335, "magenta"), (361, "rosa")]
+
+
+def cor_do_nome(img, linha, escala=1.0):
+    """Cor do NOME no comeco da linha ("Pessoa local:" em rosa, a fala em branco). No GTA 6 cada
+    pessoa da cena tem o nome numa cor: duas "Pessoa local" empilhadas ao mesmo tempo sao gente
+    diferente (20/11). -> tom em graus (0-360) ou None (nome branco/sem cor clara ou linha sem nome).
+    Pega so os pixels de LETRA (os mais claros) do trecho do nome e compara com o resto da linha."""
+    import colorsys
+    t, x0, y0, x1, y1 = linha[:5]
+    # (o nome as vezes vem numa linha so dele: "Pessoa local:" separado da fala, outra cor)
+    m = (re.match(r"^\W{0,3}([A-ZÀ-Ýa-zà-ÿ][^:;]{1,28}?)\s*[:;](?:\s+\S|\s*$)", t)
+         or re.match(r"^\W{0,3}((?:Pessoas?|Policial|Policiais|Turistas?|Transeuntes?)\s[a-zà-ÿ']{2,14})\s+[A-ZÀ-Ý]", t))
+    if not m or img is None:
+        return None
+    try:
+        a = np.asarray(img.crop((int(x0 / escala), int(y0 / escala), int(x1 / escala), int(y1 / escala)))
+                       .convert("RGB"), np.float32) / 255
+    except Exception:
+        return None
+    if a.ndim != 3 or a.shape[1] < 20 or a.shape[0] < 5:
+        return None
+    mx, mn = a.max(2), a.min(2)
+    sat = (mx - mn) / np.maximum(mx, 1e-6)
+    corte = min(a.shape[1], int(a.shape[1] * (m.end(1) + 1) / max(1, len(t))))
+    if corte < 8:
+        return None
+
+    def letras(v, s):
+        return v >= max(0.55, float(np.percentile(v, 85)))
+
+    sel_n = letras(mx[:, :corte], sat[:, :corte])
+    if sel_n.sum() < 20:
+        return None
+    s_n = sat[:, :corte][sel_n]
+    s_r = sat[:, corte:][letras(mx[:, corte:], sat[:, corte:])] if a.shape[1] - corte > 10 else np.zeros(1)
+    sn, sr = float(np.median(s_n)), float(np.median(s_r)) if len(s_r) else 0.0
+    # (ciano claro do GTA 6: 0,10 contra 0,01 do texto branco; o fundo nao entra: so letra)
+    if sn < 0.07 or sn < sr + 0.06:
+        return None
+    px = a[:, :corte][sel_n]
+    px = px[s_n > 0.1] if (s_n > 0.1).sum() > 10 else px
+    return round(colorsys.rgb_to_hsv(*np.median(px, 0))[0] * 360, 1)
+
+
+def nome_da_cor(h):
+    """Tom (graus) -> nome da cor, so para o rotulo ("Pessoa local (rosa)")."""
+    return next(nome for lim, nome in _CORES if h < lim)
+
+
+def distancia_cor(a, b):
+    d = abs(a - b) % 360
+    return min(d, 360 - d)
+
+
+# "Pessoa local Ah, olha só você!" / "Pessoa oca Ah..." (o OCR perdeu os dois-pontos do nome colorido)
+_PAPEL_SEM_DOIS_PONTOS = re.compile(r"(?:^|(?<=[.!?…]))\s*((?:Pessoas?|Policial|Policiais|Turistas?|Transeuntes?)"
+                                    r"\s[a-zà-ÿ']{2,14})\s+(?=[A-ZÀ-Ý])")
+
+
 def separar_falantes(linhas):
     """Bloco com VARIAS legendas empilhadas (multidao: "Lucia: Dinheiro no balcão! Pessoa local: Que
     bairro de merda. Atendente: Tá, tá...") -> [(nome, texto), ...] na ordem da tela, um por pessoa.
@@ -1397,10 +1499,14 @@ def separar_falantes(linhas):
     for m in _PAPEL_TOLERANTE.finditer(tudo):
         if m.start(1) > 0 and _eh_papel(m.group(1)):
             marcas.append((m.start(1), m.end(1), _papel_canonico(m.group(1)), True))
+    for m in _PAPEL_SEM_DOIS_PONTOS.finditer(tudo):
+        nome_c = _papel_canonico(m.group(1))
+        if m.start(1) > 0 and nome_c.split()[-1] in _PAPEL_2A:     # "Pessoa oca" -> "Pessoa local"
+            marcas.append((m.start(1), m.end(1), nome_c, True))
     def fala_comeca_bem(fim_nome):
         # a fala depois do "Nome:" comeca com Maiuscula/aspas: "Brian: Ah. Certo: esqueci que..." nao
         # tem uma pessoa "Certo"
-        resto = re.sub(r"^\s*[:;][.,]?\s*", "", tudo[fim_nome:])
+        resto = re.sub(r"^\s*(?:[:;][.,]?)?\s*", "", tudo[fim_nome:])
         return bool(re.match(r"[A-ZÀ-Ý\"'“«¿¡\-–—.…(\[]", resto))
 
     marcas = sorted(m for m in marcas if m[0] > 0 and fala_comeca_bem(m[1]))

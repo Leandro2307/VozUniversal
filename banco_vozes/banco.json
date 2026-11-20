@@ -259,5 +259,1025 @@
         "tom": 1.0
       }
     }
+  },
+  "caio_1": {
+    "nome": "Caio 1",
+    "categoria": "homem",
+    "descricao": "jovem, esperto, fala rápido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "caio_2": {
+    "nome": "Caio 2",
+    "categoria": "homem",
+    "descricao": "jovem, esperto, fala rápido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "caio_3": {
+    "nome": "Caio 3",
+    "categoria": "homem",
+    "descricao": "jovem, esperto, fala rápido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "diego_1": {
+    "nome": "Diego 1",
+    "categoria": "homem",
+    "descricao": "grave e rouco, carioca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "diego_2": {
+    "nome": "Diego 2",
+    "categoria": "homem",
+    "descricao": "grave e rouco, carioca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "diego_3": {
+    "nome": "Diego 3",
+    "categoria": "homem",
+    "descricao": "grave e rouco, carioca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "marcos_1": {
+    "nome": "Marcos 1",
+    "categoria": "homem",
+    "descricao": "policial, firme e sério (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "marcos_2": {
+    "nome": "Marcos 2",
+    "categoria": "homem",
+    "descricao": "policial, firme e sério (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "marcos_3": {
+    "nome": "Marcos 3",
+    "categoria": "homem",
+    "descricao": "policial, firme e sério (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "valdir_1": {
+    "nome": "Valdir 1",
+    "categoria": "homem",
+    "descricao": "grosso, cansado, voz de cascalho (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "valdir_2": {
+    "nome": "Valdir 2",
+    "categoria": "homem",
+    "descricao": "grosso, cansado, voz de cascalho (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "valdir_3": {
+    "nome": "Valdir 3",
+    "categoria": "homem",
+    "descricao": "grosso, cansado, voz de cascalho (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "leo_1": {
+    "nome": "Léo 1",
+    "categoria": "homem",
+    "descricao": "nervoso, voz mais aguda (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "leo_2": {
+    "nome": "Léo 2",
+    "categoria": "homem",
+    "descricao": "nervoso, voz mais aguda (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "leo_3": {
+    "nome": "Léo 3",
+    "categoria": "homem",
+    "descricao": "nervoso, voz mais aguda (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "rafael_1": {
+    "nome": "Rafael 1",
+    "categoria": "homem",
+    "descricao": "charmoso, barítono macio (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "rafael_2": {
+    "nome": "Rafael 2",
+    "categoria": "homem",
+    "descricao": "charmoso, barítono macio (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "rafael_3": {
+    "nome": "Rafael 3",
+    "categoria": "homem",
+    "descricao": "charmoso, barítono macio (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "severino_1": {
+    "nome": "Severino 1",
+    "categoria": "homem",
+    "descricao": "nordestino, simpático (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "severino_2": {
+    "nome": "Severino 2",
+    "categoria": "homem",
+    "descricao": "nordestino, simpático (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "severino_3": {
+    "nome": "Severino 3",
+    "categoria": "homem",
+    "descricao": "nordestino, simpático (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "tonhao_1": {
+    "nome": "Tonhão 1",
+    "categoria": "homem",
+    "descricao": "bandido, agressivo e áspero (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "tonhao_2": {
+    "nome": "Tonhão 2",
+    "categoria": "homem",
+    "descricao": "bandido, agressivo e áspero (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "tonhao_3": {
+    "nome": "Tonhão 3",
+    "categoria": "homem",
+    "descricao": "bandido, agressivo e áspero (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "gui_1": {
+    "nome": "Gui 1",
+    "categoria": "homem",
+    "descricao": "tranquilo, surfista (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "gui_2": {
+    "nome": "Gui 2",
+    "categoria": "homem",
+    "descricao": "tranquilo, surfista (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "gui_3": {
+    "nome": "Gui 3",
+    "categoria": "homem",
+    "descricao": "tranquilo, surfista (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "fernando_1": {
+    "nome": "Fernando 1",
+    "categoria": "homem",
+    "descricao": "executivo, polido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "fernando_2": {
+    "nome": "Fernando 2",
+    "categoria": "homem",
+    "descricao": "executivo, polido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "fr-FR-RemyMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pm_alex",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "fernando_3": {
+    "nome": "Fernando 3",
+    "categoria": "homem",
+    "descricao": "executivo, polido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-BrianMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "pt_BR-razo-medium",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "bia_1": {
+    "nome": "Bia 1",
+    "categoria": "mulher",
+    "descricao": "jovem, alegre, fala rápido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "bia_2": {
+    "nome": "Bia 2",
+    "categoria": "mulher",
+    "descricao": "jovem, alegre, fala rápido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "bia_3": {
+    "nome": "Bia 3",
+    "categoria": "mulher",
+    "descricao": "jovem, alegre, fala rápido (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "carla_1": {
+    "nome": "Carla 1",
+    "categoria": "mulher",
+    "descricao": "firme, determinada, levemente rouca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "carla_2": {
+    "nome": "Carla 2",
+    "categoria": "mulher",
+    "descricao": "firme, determinada, levemente rouca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "carla_3": {
+    "nome": "Carla 3",
+    "categoria": "mulher",
+    "descricao": "firme, determinada, levemente rouca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "dona_rita_1": {
+    "nome": "Dona Rita 1",
+    "categoria": "mulher",
+    "descricao": "maternal, calorosa (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "dona_rita_2": {
+    "nome": "Dona Rita 2",
+    "categoria": "mulher",
+    "descricao": "maternal, calorosa (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "dona_rita_3": {
+    "nome": "Dona Rita 3",
+    "categoria": "mulher",
+    "descricao": "maternal, calorosa (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "jessica_1": {
+    "nome": "Jéssica 1",
+    "categoria": "mulher",
+    "descricao": "sarcástica, carioca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "jessica_2": {
+    "nome": "Jéssica 2",
+    "categoria": "mulher",
+    "descricao": "sarcástica, carioca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "jessica_3": {
+    "nome": "Jéssica 3",
+    "categoria": "mulher",
+    "descricao": "sarcástica, carioca (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "livia_m_1": {
+    "nome": "Lívia M. 1",
+    "categoria": "mulher",
+    "descricao": "tímida, fala baixo (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "livia_m_2": {
+    "nome": "Lívia M. 2",
+    "categoria": "mulher",
+    "descricao": "tímida, fala baixo (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "livia_m_3": {
+    "nome": "Lívia M. 3",
+    "categoria": "mulher",
+    "descricao": "tímida, fala baixo (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "renata_1": {
+    "nome": "Renata 1",
+    "categoria": "mulher",
+    "descricao": "detetive, séria e grave (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "renata_2": {
+    "nome": "Renata 2",
+    "categoria": "mulher",
+    "descricao": "detetive, séria e grave (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "renata_3": {
+    "nome": "Renata 3",
+    "categoria": "mulher",
+    "descricao": "detetive, séria e grave (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "sonia_1": {
+    "nome": "Sônia 1",
+    "categoria": "mulher",
+    "descricao": "voz de fumante, durona (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "sonia_2": {
+    "nome": "Sônia 2",
+    "categoria": "mulher",
+    "descricao": "voz de fumante, durona (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "sonia_3": {
+    "nome": "Sônia 3",
+    "categoria": "mulher",
+    "descricao": "voz de fumante, durona (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "maria_1": {
+    "nome": "Maria 1",
+    "categoria": "mulher",
+    "descricao": "nordestina, animada (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "maria_2": {
+    "nome": "Maria 2",
+    "categoria": "mulher",
+    "descricao": "nordestina, animada (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "maria_3": {
+    "nome": "Maria 3",
+    "categoria": "mulher",
+    "descricao": "nordestina, animada (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "helena_1": {
+    "nome": "Helena 1",
+    "categoria": "mulher",
+    "descricao": "elegante, sofisticada (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "helena_2": {
+    "nome": "Helena 2",
+    "categoria": "mulher",
+    "descricao": "elegante, sofisticada (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "helena_3": {
+    "nome": "Helena 3",
+    "categoria": "mulher",
+    "descricao": "elegante, sofisticada (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "nina_1": {
+    "nome": "Nina 1",
+    "categoria": "mulher",
+    "descricao": "malandra, enérgica (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "nina_2": {
+    "nome": "Nina 2",
+    "categoria": "mulher",
+    "descricao": "malandra, enérgica (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "en-US-AvaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 0.93
+      }
+    },
+    "origem": "elevenlabs_design"
+  },
+  "nina_3": {
+    "nome": "Nina 3",
+    "categoria": "mulher",
+    "descricao": "malandra, enérgica (ElevenLabs Voice Design)",
+    "tom": 1.0,
+    "velocidade": 1.0,
+    "rapida": {
+      "motor": "edge",
+      "voz": "pt-BR-ThalitaMultilingualNeural",
+      "tom": 1.0,
+      "reserva": {
+        "voz": "kokoro:pf_dora",
+        "tom": 1.0
+      }
+    },
+    "origem": "elevenlabs_design"
   }
 }

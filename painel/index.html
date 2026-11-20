@@ -430,10 +430,11 @@ function banco(){
   $("#banco").innerHTML = grupos.map(c => {
     const vs = Object.values(b).filter(v=>v.categoria===c).sort((a,z)=>a.id.localeCompare(z.id));
     return `<div class="cat-box" style="--cor:${cor(c)}"><h3><span class="e">${CAT[c].e}</span>${CAT[c].r}<span class="espaco"></span><span class="tag">${vs.length} voz${vs.length>1?"es":""}</span></h3>
-      ${vs.map((v,i)=>`<div class="voz"><div class="num">${c==="narrador"?"N":i+1}</div>
-        <div class="info"><b>${esc(v.nome)}</b><span title="${esc(v.descricao)}">${esc(v.descricao)}</span>
+      ${vs.map((v,i)=>`<div class="voz" style="${v.desligada?"opacity:.45":""}"><div class="num">${c==="narrador"?"N":i+1}</div>
+        <div class="info"><b>${esc(v.nome)}${v.desligada?" · não usar":""}</b><span title="${esc(v.descricao)}">${esc(v.descricao)}</span>
         <span class="usos">amostra ${v.segundos}s${v.segundos<8?" ⚠ curta":""} · ${usos[v.id]||0} personagem(ns) usando</span></div>
         <button class="icone" title="Ouvir esta voz falando" data-testar="${v.id}">▶</button>
+        ${c==="narrador"?"":`<button class="icone" title="${v.desligada?"Voltar a usar esta voz nos personagens":"Não usar esta voz (soou mal): quem usava ganha outra"}" data-desligar="${v.id}" data-on="${v.desligada?0:1}">${v.desligada?"✅":"🚫"}</button>`}
         <button class="icone" title="Ouvir a amostra original" data-amostra="${v.id}">🎧</button>
         <button class="icone" title="Trocar a amostra (arquivo .wav de 10 a 60 s com uma pessoa só falando)" data-trocar="${v.id}">⤒</button></div>`).join("")}</div>`;
   }).join("");
@@ -444,6 +445,12 @@ $("#banco").addEventListener("click", e => {
   if (b.dataset.testar){ api("testar",{voz:b.dataset.testar}); toast("Gerando…"); }
   if (b.dataset.amostra){ if (tocador) tocador.pause(); tocador = new Audio("/api/amostra/"+b.dataset.amostra+"?t="+Date.now()); tocador.play(); }
   if (b.dataset.trocar){ uploadAlvo = b.dataset.trocar; $("#arquivo").click(); }
+  if (b.dataset.desligar){
+    const desl = b.dataset.on === "1", v = (E.banco||{})[b.dataset.desligar];
+    api("voz",{id:b.dataset.desligar, desligada:desl});
+    if (v){ v.desligada = desl; banco(); }
+    toast(desl ? `${v?v.nome:"Voz"} não será mais usada` : `${v?v.nome:"Voz"} voltou para o sorteio`);
+  }
 });
 $("#arquivo").addEventListener("change", async e => {
   const f = e.target.files[0]; if (!f || !uploadAlvo) return;

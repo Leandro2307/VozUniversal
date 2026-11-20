@@ -480,11 +480,90 @@ confere("empilhadas em linhas", separar_falantes([L("Lucia: Rápido, porra!", y=
 for n, esperado in [("Pessoa local", True), ("Pessoas locais", True), ("Turista 2", True), ("Lucia", False),
                     ("Policial", False), ("Atendente", False)]:
     confere(f"figurante {n!r}", eh_figurante(n), esperado)
+# nivelador: o volume nao da degrau na emenda de dois pedacos ("A culpa é sua" em pedacos, 20/11)
+from nucleo.vozes import Nivelador   # noqa: E402
+_niv = Nivelador()
+_p1 = _niv(_np.sin(_np.linspace(0, 600, 12000)).astype(_np.float32) * 0.05, 24000)
+_p2 = _niv(_np.sin(_np.linspace(0, 600, 12000)).astype(_np.float32) * 0.2, 24000)
+_ganho_fim1 = float(_np.abs(_p1[-600:]).max() / 0.05)
+_ganho_ini2 = float(_np.abs(_p2[:600]).max() / 0.2)
+confere("nivelador sem degrau na emenda", abs(_ganho_fim1 - _ganho_ini2) < 0.05 * _ganho_fim1, True)
+
+# duas "Pessoa local" empilhadas com o nome em cores diferentes = duas pessoas (print do GTA 6, 20/11)
+from PIL import ImageDraw as _Draw, ImageFont as _Fonte   # noqa: E402
+from nucleo.tela import cor_do_nome, nome_da_cor   # noqa: E402
+_im = _Img.new("RGB", (900, 70), (90, 90, 90))
+_d = _Draw.Draw(_im)
+try:
+    _f = _Fonte.truetype("arial.ttf", 30)
+except Exception:
+    _f = None
+_d.text((20, 10), "Pessoa local:", fill=(240, 150, 160), font=_f)
+_d.text((215, 10), "Ah, olha só você!", fill=(255, 255, 255), font=_f)
+_h_rosa = cor_do_nome(_im, ("Pessoa local: Ah, olha só você!", 20, 8, 500, 45))
+confere("cor do nome rosa", _h_rosa is not None and nome_da_cor(_h_rosa), "rosa")
+confere("fala branca nao tem cor de nome", cor_do_nome(_im, ("Ah, olha só você!", 215, 8, 500, 45)), None)
+_n_cor = Nucleo.__new__(Nucleo)
+_dup = [("Pessoa local", "Ah, olha só você!"), ("Pessoa local", "Belo trabalho, demente!")]
+_im2 = _Img.new("RGB", (900, 120), (90, 90, 90))
+_d2 = _Draw.Draw(_im2)
+for _y, _cor, _fala in [(10, (240, 150, 160), "Ah, olha só você!"), (65, (150, 230, 230), "Belo trabalho, demente!")]:
+    _d2.text((20, _y), "Pessoa local:", fill=_cor, font=_f)
+    _d2.text((215, _y), _fala, fill=(255, 255, 255), font=_f)
+_bl = [("Pessoa local: Ah, olha só você!", 20, 8, 470, 45), ("Pessoa local: Belo trabalho, demente!", 20, 63, 560, 100)]
+_sep = [n for n, _ in _n_cor._separar_por_cor(_dup, _bl, _im2, 1.0)]
+confere("empilhadas mesmo nome, cores diferentes", len(set(_sep)) == 2 and all(s.startswith("Pessoa local (") for s in _sep), True)
+_sem_cor = [n for n, _ in Nucleo.__new__(Nucleo)._separar_por_cor(_dup, _bl, _Img.new("RGB", (900, 120)), 1.0)]
+confere("empilhadas sem cor lida: numeradas diferentes", len(set(_sem_cor)), 2)
+
+# voz pelo TOM da voz original + "Pessoa desconhecida" homem e mulher separados (20/11)
+from nucleo.identidade import Elenco as _Elenco   # noqa: E402
+
+
+class _BancoTom:
+    vozes = {"h_grave": {"categoria": "homem", "nome": "G"}, "h_media": {"categoria": "homem", "nome": "M"},
+             "m_1": {"categoria": "mulher", "nome": "F"}}
+    tons = {"h_grave": 100.0, "h_media": 135.0, "m_1": 230.0}
+
+    def da_categoria(self, c):
+        return [k for k, v in self.vozes.items() if v["categoria"] == c]
+
+    def tom(self, v):
+        return self.tons.get(v)
+
+
+class _PerfilVazio:
+    def __init__(self):
+        self.personagens = {}
+
+    def salvar(self):
+        pass
+
+
+_el = _Elenco(_PerfilVazio(), _BancoTom())
+confere("tom grave -> voz grave", _el._voz_para("A", "homem", 98)[0], "h_grave")
+confere("tom medio -> voz media", _el._voz_para("B", "homem", 140)[0], "h_media")
+confere("ajuste fino no maximo 5%", _el._voz_para("C", "homem", 60)[1], 0.95)
+_el.perfil.personagens["Pessoa desconhecida"] = {"categoria": "homem", "voz": "h_grave", "tom": 1.0, "vel": 1.0}
+confere("variante mulher", _el.variante("Pessoa desconhecida", "mulher", 210)[0], "Pessoa desconhecida (mulher)")
+confere("variante usa voz de mulher", _el.perfil.personagens["Pessoa desconhecida (mulher)"]["voz"], "m_1")
+
+# erros de OCR das falas do GTA 6 (18-20/11)
+for lido, certo in [("Fica atrás de mim, amor, fiea atrás de mim.", "Fica atrás de mim, amor, fica atrás de mim."),
+                    ("Não tem nâda aqui.", "Não tem nada aqui."), ("Vem çom a gente.", "Vem com a gente."),
+                    ("Qual é, maño!", "Qual é, mano!"), ("Que porrra é essa?", "Que porra é essa?"),
+                    ("Nâo sei.", "Não sei."), ("kkkk muito bom", "kkkk muito bom"), ("AAA!", "AAA!")]:
+    confere(f"ocr {lido!r}", dic.consertar(lido), certo)
+
 # "É" que o OCR leu sem acento: a voz lia "e" (teste do assalto, 20/11)
 for t, esperado in [("E um assalto!", "É um assalto!"), ("E claro.", "É claro."), ("E isso.", "É isso."),
                     ("E isso que você fez?", "E isso que você fez?"), ("E mesmo assim ele foi.", "E mesmo assim ele foi."),
                     ("E um dia ele voltou pra casa.", "E um dia ele voltou pra casa."), ("E você?", "E você?"),
-                    ("Isso. E sério?", "Isso. É sério?")]:
+                    ("Isso. E sério?", "Isso. É sério?"),
+                    # GTA 6, 20/11 09:37: legenda "Escuta, mano. É seu dia de sorte."
+                    ("Escutar mano. E seu dia de sorte.", "Escuta, mano. É seu dia de sorte."),
+                    ("E seu irmão?", "E seu irmão?"), ("E meu pai morreu ontem.", "E meu pai morreu ontem."),
+                    ("Vou falar cara a cara.", "Vou falar cara a cara.")]:
     confere(f"acento no É {t!r}", preparar_fala(t), esperado)
 confere("etiqueta de idioma",tirar_idioma("(Espanhol) Ai, Santa Bárbara."), "Ai, Santa Bárbara.")
 confere("sem etiqueta", tirar_idioma("Espanta os pombos."), "Espanta os pombos.")

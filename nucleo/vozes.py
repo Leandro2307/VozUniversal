@@ -50,6 +50,25 @@ _RE_E_VERBO = re.compile(r"(^|[.!?…]\s+)E(?=\s+(?:(?:" + _E_VERBO + r")(?=[\s.
                          + _E_VERBO_FIM + r")\s*[.!?…]))")
 # "E um/uma X!" curtinho ("E um assalto!", "E uma cilada.") tambem e "É"
 _RE_E_UM = re.compile(r"(^|[.!?…]\s+)E(?=\s+uma?\s+[\wÀ-ÿ-]+(?:\s+[\wÀ-ÿ-]+)?\s*[.!?…])")
+# "E seu dia de sorte." / "E minha vez agora!" (afirmacao, termina em . ou !) = "É"; pergunta
+# ("E seu irmão?") continua "e" (GTA 6, 20/11 09:37)
+_RE_E_POSSE = re.compile(r"(^|[.!?…]\s+)E(\s+(?:seu|sua|meu|minha|nosso|nossa|teu|tua)\s+[^.!?…]*[.!])(?=\s|$)")
+# ...se o resto da frase tiver verbo proprio e "e": "E meu pai morreu ontem."
+_RE_TEM_VERBO = re.compile(r"\b(?:\w+(?:ou|eu|iu|ava|avam|ia|iam|aram|eram|iram|ará|erá|irá|ando|endo|indo)|tá|está|"
+                           r"estava|foi|vai|vou|vão|tem|tinha|era|é|fez|disse|quer|pode|precisa|sabe|deu|fica|ficou)\b",
+                           re.I)
+
+
+def _e_posse(m):
+    resto = m.group(2)
+    if _RE_TEM_VERBO.search(resto.split(None, 2)[-1] if len(resto.split()) > 2 else ""):
+        return m.group(0)
+    return m.group(1) + "É" + resto
+# "Escuta, mano." lido "Escutar mano." (a virgula virou "r"): no comeco da frase, palavra terminada em
+# "r" + vocativo = imperativo + virgula
+_RE_VOCATIVO = re.compile(r"(^|[.!?…]\s+)([A-ZÀ-Ý][a-zà-ÿ]{2,})r(\s+)(mano|mana|cara|parceiro|parça|irmão|irmao|"
+                          r"velho|véi|moça|moço|amigo|amiga|gente|galera|chefe|truta|patrão|senhor|senhora|"
+                          r"querido|querida|amor|garoto|garota)(?=[\s.,!?…]|$)")
 
 
 # outras palavras que o OCR (ou a legenda) deixa sem acento e a voz le errado (log de 13 mil falas, 20/11):
@@ -62,6 +81,8 @@ _RE_DAI = re.compile(r"\b([Dd])ai\b(?!-)")
 def acentuar_e(t):
     t = _RE_E_VERBO.sub(r"\1É", t)
     t = _RE_E_UM.sub(r"\1É", t)
+    t = _RE_E_POSSE.sub(_e_posse, t)
+    t = _RE_VOCATIVO.sub(r"\1\2,\3\4", t)
     t = _RE_TA.sub(r"\1\2tá", t)
     return _RE_DAI.sub(lambda m: m.group(1) + "aí", t)
 
@@ -109,6 +130,21 @@ def pausa_apos(frase):
     if s[-1:] in ".:":
         return 0.14
     return 0.08
+
+
+def juntar_frases(frases, maximo=300):
+    """Frases da MESMA fala geradas juntas, num pedido so: "Olha, não quero machucar ninguém. Só
+    quero a grana." em dois pedidos saia com a entonacao recomecando no meio e um buraco entre as
+    frases (o mesmo problema do "João foi ao... MERCADO", so que entre frases). Junta as seguidas
+    ate `maximo` letras. Na voz online o 1o som nao demora mais por isso (1 a 4 frases: ~0,8 s
+    nas 5 medidas de 20/11), porque ela devolve o som conforme gera."""
+    out = []
+    for f in frases:
+        if out and len(out[-1]) + 1 + len(f) <= maximo:
+            out[-1] += " " + f
+        else:
+            out.append(f)
+    return out
 
 
 class Reamostrador:
@@ -300,8 +336,17 @@ class Nivelador:
             voz = rms[rms > 0.008]          # so os trechos com fala (ignora silencio)
             if len(voz):
                 alvo = min(4.0, max(0.3, self.ALVO / float(np.median(voz))))
+                anterior = self.ganho
                 self.ganho = alvo if self.ganho is None else 0.7 * self.ganho + 0.3 * alvo
-        y = w * (self.ganho or 1.0)
+                if anterior is not None and abs(self.ganho - anterior) > 1e-3:
+                    # o ganho DESLIZA do valor do pedaco anterior ate o novo: antes mudava de uma vez
+                    # na emenda e o volume dava um degrau ("A culpa é sua" saia em pedacos, 20/11)
+                    y = w * np.linspace(anterior, self.ganho, len(w), dtype=np.float32)
+                    return self._limitar(y)
+        return self._limitar(w * (self.ganho or 1.0))
+
+    @staticmethod
+    def _limitar(y):
         a = np.abs(y)
         if a.max() > 0.8:                   # limita os picos com suavidade: nunca passa de 1.0
             y = np.where(a > 0.8, np.sign(y) * (0.8 + 0.2 * np.tanh((a - 0.8) / 0.2)), y)
@@ -342,11 +387,39 @@ class Banco:
     def __init__(self):
         self.arquivo = os.path.join(BANCO, "banco.json")
         self.vozes = ler_json(self.arquivo, {}) or {}
+        # tom (Hz) de cada voz, medido na amostra (para casar com o tom da voz original do jogo).
+        # Arquivo separado: o banco.json e regravado pelo painel. Voz nova sem tom: mede em 2o plano.
+        self.arq_tons = os.path.join(BANCO, "tons.json")
+        self.tons = ler_json(self.arq_tons, {}) or {}
+        if any(v not in self.tons for v in self.vozes):
+            threading.Thread(target=self._medir_tons, daemon=True, name="tons").start()
+
+    def _medir_tons(self):
+        try:
+            import soundfile as sf
+            from .util import tom_hz
+            for vid in list(self.vozes):
+                if vid in self.tons:
+                    continue
+                partes = []
+                for w in self.amostras(vid):
+                    x, sr = sf.read(w, dtype="float32", always_2d=True)
+                    x = x.mean(1)
+                    partes.append(np.interp(np.arange(0, len(x), sr / 16000), np.arange(len(x)), x).astype(np.float32))
+                self.tons[vid] = tom_hz(np.concatenate(partes), 16000) if partes else None
+            gravar_json(self.arq_tons, self.tons)
+        except Exception as e:
+            diag.ev("tons_erro", erro=repr(e)[:160])
+
+    def tom(self, vid):
+        return self.tons.get(vid)
 
     def da_categoria(self, cat):
         """Vozes que o sorteio pode usar. As "exclusivas" (ex.: Lucia) ficam de fora: so vao para
-        o personagem com o nome delas ou para quem o usuario escolher no painel."""
-        return sorted(k for k, v in self.vozes.items() if v.get("categoria") == cat and not v.get("exclusiva"))
+        o personagem com o nome delas ou para quem o usuario escolher no painel. As "desligadas"
+        (botao "não usar" no painel: voz que soou mal) tambem."""
+        return sorted(k for k, v in self.vozes.items()
+                      if v.get("categoria") == cat and not v.get("exclusiva") and not v.get("desligada"))
 
     def do_personagem(self, nome):
         """Voz exclusiva reservada para este nome de personagem (campo "personagens" do banco.json)."""
@@ -383,6 +456,8 @@ class Banco:
         if wav.ndim > 1:
             wav = wav.mean(1)
         sf.write(destino, wav, sr)
+        self.tons.pop(vid, None)               # amostra nova: o tom dela e medido de novo
+        threading.Thread(target=self._medir_tons, daemon=True, name="tons").start()
         return len(wav) / sr
 
     def editar(self, vid, **campos):
@@ -392,6 +467,11 @@ class Banco:
         for k, val in campos.items():
             if val is not None and k in ("nome", "descricao", "tom", "velocidade"):
                 v[k] = val
+            elif val is not None and k == "desligada":
+                if val:
+                    v["desligada"] = True
+                else:
+                    v.pop("desligada", None)
         gravar_json(self.arquivo, self.vozes)
         return v
 
@@ -737,12 +817,18 @@ class MotorClonada:
         """Divide em frases, mas junta as curtas com a seguinte: sozinha, uma frase como "Olá!"
         faz o XTTS se perder e inventar murmurios depois dela."""
         partes = [f.strip() for f in re.split(r"(?<=[.!?…])\s+", texto) if re.search(r"\w", f)]
-        out = []
-        for f in partes:
-            if out and (len(out[-1]) < 40 and len(out[-1]) + len(f) < 200):
-                out[-1] += " " + f
-            else:
-                out.append(f)
+        cfg = getattr(self, "cfg", None) or {}
+        if cfg.get("frases_juntas", True):
+            # a legenda inteira numa geracao so (ate o limite do XTTS, ~180 letras): entonacao
+            # continua entre as frases e sem o buraco de recomecar a geracao
+            out = juntar_frases(partes, 180)
+        else:
+            out = []
+            for f in partes:
+                if out and (len(out[-1]) < 40 and len(out[-1]) + len(f) < 200):
+                    out[-1] += " " + f
+                else:
+                    out.append(f)
         if len(out) > 1 and len(out[-1]) < 20 and len(out[-2]) + len(out[-1]) < 220:
             curta = out.pop()                    # sobrou uma curtinha no fim: vai junto da anterior
             out[-1] += " " + curta               # (antes: out[-2] += out.pop() -> IndexError)
@@ -1271,7 +1357,7 @@ class MotorRapida:
         if time.time() - self._edge_sonda < 5:
             return
         self._edge_sonda = time.time()
-        frase = (dividir_frases(texto) or [texto])[0]
+        frase = (self._blocos(texto) or [texto])[0]
         b = self._futura(frase, voz, taxa)
 
         def ver():
@@ -1291,13 +1377,22 @@ class MotorRapida:
         tom_total = float(r.get("tom", 1.0)) * tom
         vel_total = float(r.get("velocidade", 1.0)) * vel
         taxa = self._taxa(vel_total, tom_total)
-        for f in dividir_frases(texto):
+        for f in self._blocos(texto):
             self._futura(f, r["voz"], taxa)
+
+    def _blocos(self, texto):
+        """Pedidos a voz online para esta fala: as frases juntas (ver juntar_frases). Config
+        "frases_juntas": false volta a uma frase por pedido."""
+        frases = dividir_frases(texto)
+        if not self.cfg.get("frases_juntas", True):
+            return frases
+        return juntar_frases(frases, int(self.cfg.get("frases_juntas_max", 300)))
 
     def _gerar_edge(self, texto, voz, tom, vel):
         taxa = self._taxa(vel, tom)
-        frases = dividir_frases(texto)
-        # todas as frases sao pedidas juntas: a 2a ja chegou quando a 1a termina de tocar
+        frases = self._blocos(texto)
+        # (se ainda sairem varios pedidos, sao feitos todos de uma vez: o 2o ja chegou quando o 1o
+        # termina de tocar)
         baixadas = [self._futura(f, voz, taxa) for f in frases]
         for frase, bx in zip(frases, baixadas):
             ream = Reamostrador(tom)

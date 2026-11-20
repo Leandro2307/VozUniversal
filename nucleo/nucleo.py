@@ -17,7 +17,8 @@ from .identidade import Elenco, ROTULOS, Visao
 from .leitor import Leitor, dividir_frases
 from .perfil import Perfil
 from .tela import (Descobridor, DetectorVideo, Dicionario, eh_relogio,Janela, achar_legenda, capturar, em_ordem, limpar, ocr_linhas, regiao_em_tela,
-                   separar_nome, separar_falantes, eh_figurante, tirar_idioma, nome_estavel, suavizar, isolar_contorno)
+                   separar_nome, separar_falantes, eh_figurante, tirar_idioma, nome_estavel, suavizar, isolar_contorno,
+                   _PAPEIS, _papel_canonico)
 from .util import FIM, gravar_json, CONFIG, historico_log, log, normalizar, ouvir_log, semelhanca
 from .vozes import Banco, Narrador
 
@@ -627,6 +628,7 @@ class Nucleo:
             return "", ""              # na troca (saindo da tela cheia) a area ja mostra outra janela
         self._nao_li(None)
         img = capturar(sct, reg)
+        img_cor = img                  # colorida, no tamanho original (a cor do nome separa as pessoas)
         # video pequeno (janela): a legenda fica miuda e o OCR erra ("Dulch"): amplia antes de ler
         esc = 1.0
         if img.width < 1100:
@@ -662,7 +664,7 @@ class Nucleo:
         self.legenda_frac = [(vx0 + x0 / esc) / w, (topo + y0 / esc) / h, (vx0 + x1 / esc) / w, (topo + y1 / esc) / h]
         self._quadro = (img, (x0, y0, x1, y1))
         nome, corpo = separar_nome(bloco)          # "Swanson: A Abigail disse..." -> Swanson
-        falantes = separar_falantes(bloco)
+        falantes = self._separar_por_cor(separar_falantes(bloco), bloco, img_cor, esc)
         if len(falantes) >= 2:
             # varias legendas empilhadas, de pessoas diferentes (multidao): a de BAIXO segue o caminho
             # normal (leitor); as de cima viram falas proprias, cada uma na voz de quem fala
@@ -671,6 +673,11 @@ class Nucleo:
             corpo = [(ult, 0, 0, 1, 1)]
             self._empilhadas = [(n, self.dic.consertar(limpar(t)) if self.dic.ok else limpar(t))
                                 for n, t in falantes[:-1]]
+        elif self._nome_cor_unico:
+            nome = self._nome_cor_unico          # sozinha, mas com a cor de alguem ja separado pela cor
+        if nome and nome.split()[0].lower() in _PAPEIS:
+            # "Pessoa desconhéçida" (OCR) virava outra pessoa, com outra voz (20/11 09:37)
+            nome = _papel_canonico(nome)
         texto = tirar_idioma(limpar(" ".join(l[0] for l in corpo)))
         if nome and " " in nome and self.perfil:
             # nome partido pelo OCR ("Du tch" = Dutch, 15/11): junto, e alguem conhecido?
@@ -779,6 +786,22 @@ class Nucleo:
                 diag.ev("fusao_erro", erro=repr(e)[:120])
         if self.dic.ok and texto:
             texto = self.dic.consertar(texto)
+        if nome and nome.split()[0].lower() in _PAPEIS:
+            # de novo aqui: a juncao com os personagens conhecidos (sem acento) devolvia a grafia errada
+            # de uma ficha antiga ("Pessoa desconhéçida" virava outra voz, 20/11 09:52)
+            nome = _papel_canonico(nome)
+        if nome and texto:
+            # o nome de quem fala que sobrou no comeco da fala (OCR): "Pessoa de'conhecida: Roubou?"
+            # era lido em voz alta e "Pessoa Ah, porra!" falava "Pessoa" (20/11 09:52)
+            m_n = re.match(r"^\s*([A-ZÀ-Ý][\wÀ-ÿ'’]*(?:\s[\wÀ-ÿ'’]+){0,2})\s*[:;]\s+(?=\S)", texto)
+            p_t = texto.split()
+            if m_n and semelhanca(normalizar(m_n.group(1)), normalizar(nome)) >= 0.7:
+                diag.ev("nome_tirado_da_fala", lido=m_n.group(1), quem=nome)
+                texto = texto[m_n.end():]
+            elif (len(p_t) >= 2 and " " in nome and normalizar(p_t[0]) == normalizar(nome.split()[0])
+                  and p_t[1][:1].isupper()):
+                diag.ev("nome_tirado_da_fala", lido=p_t[0], quem=nome)
+                texto = texto.split(None, 1)[1]
         if not texto or (len(texto.split()) < 2 and (texto[-1:] not in FIM or len(re.findall(r"[^\W\d_]", texto)) < 3)):
             return "", nome
         return texto, nome
@@ -987,6 +1010,58 @@ class Nucleo:
         except Exception:
             return True
 
+    def _separar_por_cor(self, falantes, bloco, img_cor, esc):
+        """Duas legendas EMPILHADAS com o mesmo nome generico ("Pessoa local" rosa + "Pessoa local"
+        ciano, GTA 6 20/11) sao pessoas diferentes: o nome vira "Pessoa local (rosa)" / "(ciano)",
+        cada uma com a sua voz. A cor de cada uma fica lembrada (+-20 graus de tom = mesma pessoa):
+        quando ela aparece sozinha depois, continua com a mesma voz.
+        -> falantes com os nomes trocados; self._nome_cor_unico = nome trocado se for 1 so."""
+        from .tela import cor_do_nome, distancia_cor, nome_da_cor
+        self._nome_cor_unico = None
+        if not falantes or not any(n and n.split()[0].lower() in _PAPEIS for n, _ in falantes):
+            return falantes
+        cores = []
+        for l in bloco:
+            try:
+                h = cor_do_nome(img_cor, l, esc)
+            except Exception:
+                h = None
+            if h is not None or re.match(r"^\W{0,3}[A-ZÀ-Ý][^:;]{1,28}?\s*[:;]\s", l[0]):
+                cores.append(h)
+        com_nome = [i for i, (n, _) in enumerate(falantes) if n]
+        tons = {i: (cores[k] if k < len(cores) else None) for k, i in enumerate(com_nome)}
+        conhecidas = getattr(self, "_cores_nome", None)
+        if conhecidas is None:
+            conhecidas = self._cores_nome = {}          # nome base -> [(tom, rotulo)]
+        bases = [n for n, _ in falantes if n]
+        repetidos = {b for b in bases if bases.count(b) >= 2 and b.split()[0].lower() in _PAPEIS}
+        saida, usados = [], set()           # rotulos ja dados NESTA leitura (nunca dois iguais)
+        for i, (n, t) in enumerate(falantes):
+            h = tons.get(i)
+            if n and n.split()[0].lower() in _PAPEIS:
+                lista = conhecidas.setdefault(n, [])
+                achou = next((r for c, r in lista if h is not None and distancia_cor(c, h) <= 20
+                              and (n, r) not in usados), None)
+                if achou:
+                    usados.add((n, achou))
+                    n = f"{n} ({achou})"
+                elif n in repetidos:
+                    # pessoa nova numa cena empilhada: cria o rotulo pela cor (ou pela ordem, sem cor)
+                    rot = nome_da_cor(h) if h is not None else "1"
+                    k = len(lista) + 1
+                    while any(r == rot for _, r in lista) or (n, rot) in usados:
+                        k += 1
+                        rot = f"{nome_da_cor(h)} {k}" if h is not None else str(k)
+                    usados.add((n, rot))
+                    if h is not None:
+                        lista.append((h, rot))
+                    diag.ev("nome_por_cor", nome=n, tom=h, rotulo=rot)
+                    n = f"{n} ({rot})"
+            saida.append((n, t))
+        if len(saida) == 1 and saida[0][0] != falantes[0][0]:
+            self._nome_cor_unico = saida[0][0]
+        return saida
+
     def _falar_empilhadas(self, agora):
         """Legendas de CIMA de um bloco empilhado (multidao, ver separar_falantes): cada uma na voz de
         quem fala. Ficam na tela enquanto as de baixo aparecem, entao: so fala o que leu igual em 2
@@ -1056,13 +1131,16 @@ class Nucleo:
                 ant = getattr(self, "_ult_fala", None)
                 quem = ant[0] if ant and ant[0] and agora - ant[2] < 6 else ""
             fig = eh_figurante(quem)
-            fundo = fig and self.narr.ocupado()
+            # por baixo so se quem esta falando agora for OUTRA pessoa (a mesma falaria duas vezes junto)
+            fundo = fig and self.narr.ocupado() and quem != getattr(self, "_quem_principal", None)
             diag.ev("legenda_empilhada", quem=quem, texto=" ".join(frases)[:80], figurante=fig, fundo=fundo)
             if quem and self.elenco:
                 f = self.elenco.observar(quem, " ".join(frases))
                 for i, fr in enumerate(frases):
                     self.narr.falar(fr, f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), quem=quem,
                                     categoria=f["categoria"], nova=i == 0, visto=v[0], figurante=fig, fundo=fundo)
+                if not fundo:
+                    self._quem_principal = quem
                 self.emitir("personagens", self.personagens())
             else:
                 for i, fr in enumerate(frases):
@@ -1149,6 +1227,10 @@ class Nucleo:
             f = self.elenco.ficha(quem) if quem else None
             voz, tom, vel, cat = ((f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), f.get("categoria") or "")
                                   if f and f.get("voz") else ("narrador", 1.0, 1.0, "narrador" if not quem else ""))
+            if self.cfg.get("frases_juntas", True):
+                # a voz gera as frases da legenda JUNTAS: pede o mesmo texto que vai ser falado
+                # (legenda inteira na tela = todas completas, a fala sai com elas juntas)
+                completas = [" ".join(completas)]
             for fr in completas[:3]:
                 self.narr.previa(fr, voz, tom, vel, quem if f else "", cat)
         except Exception as e:
@@ -1212,7 +1294,7 @@ class Nucleo:
             if res["sexo"] and (res.get("cedo") or res["certeza"] >= float(self.cfg.get("escuta_certeza", 0.35))):
                 from .identidade import categoria_de
                 categoria = categoria_de(res["sexo"], "crianca" if res["crianca"] >= 0.6 else "adulto")
-                nome, f = self.elenco.anonimo(categoria)
+                nome, f = self.elenco.anonimo(categoria, res.get("f0"))
                 self._ult_anonimo = nome
                 r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), nome, f["categoria"])
                 decisao = nome
@@ -1247,6 +1329,25 @@ class Nucleo:
             if not decisao:
                 self._ult_anonimo = "narrador"
             diag.ev("escuta_fala", texto=texto[:60], quem="", decisao=decisao, **res)
+        elif quem and quem.split()[0].lower() in _PAPEIS and not (self.elenco.ficha(quem) or {}).get("fixo"):
+            # NOME GENERICO ("Pessoa desconhecida", "Policial", "Atendente"): gente diferente com o mesmo
+            # nome, homem E mulher (GTA 6, 20/11). Ouve TODA fala: voz do sexo oposto ao da ficha vai
+            # para "Pessoa desconhecida (mulher)" / "(homem)", cada uma com a sua voz.
+            from .identidade import _sexo_da_categoria, categoria_de
+            f = self.elenco.ficha(quem) or {}
+            res = esc.ouvir(visto, esperar=max(0.0, visto + espera - time.time()))
+            certo = res.get("sexo") and res.get("certeza", 0) >= float(self.cfg.get("escuta_certeza", 0.35))
+            if certo and f.get("categoria") and res["sexo"] != _sexo_da_categoria(f["categoria"]):
+                cat_v = categoria_de(res["sexo"], "crianca" if res.get("crianca", 0) >= 0.6 else "adulto")
+                nome_v, fv = self.elenco.variante(quem, cat_v, res.get("f0"))
+                r = (fv["voz"], fv.get("tom", 1.0), fv.get("vel", 1.0), nome_v, fv["categoria"])
+                diag.ev("escuta_fala", texto=texto[:60], quem=quem, decisao=nome_v, **res)
+            else:
+                if f and f.get("ouvidas", 0) < 6:
+                    f = self.elenco.ouvir(quem, res) or f
+                if f:
+                    r = (f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), quem, f["categoria"])
+                diag.ev("escuta_fala", texto=texto[:60], quem=quem, decisao=f.get("categoria"), **res)
         else:
             f = self.elenco.ficha(quem)
             if f and not f.get("fixo") and not f.get("anonimo") and f.get("ouvidas", 0) < 6:
@@ -1667,12 +1768,13 @@ class Nucleo:
                     # (se ainda nao esta pronta, _talvez_carregar_visao carrega num momento calmo)
                 f = self.elenco.observar(self.nome_pagina, fala, prob)
                 fig = eh_figurante(self.nome_pagina)
-                if nova:
-                    # figurante ("Pessoa local") com alguem ja falando: vai por baixo, sem fila
-                    self._fundo_atual = fig and self.narr.ocupado()
+                # legenda que veio DEPOIS da outra (conversa normal) entra na fila, mesmo de figurante:
+                # no fundo ela tocava por cima da fala anterior ("Ei, você é uma doida" + "Vai se foder"
+                # ao mesmo tempo, e duas "Pessoa desconhecida" respondendo uma a outra, 20/11 09:52).
+                # Fundo so nas legendas EMPILHADAS ao mesmo tempo (ver _falar_empilhadas).
                 self.narr.falar(fala, f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), quem=self.nome_pagina,
-                                categoria=f["categoria"], nova=nova, visto=visto, figurante=fig,
-                                fundo=fig and getattr(self, "_fundo_atual", False))
+                                categoria=f["categoria"], nova=nova, visto=visto, figurante=fig)
+                self._quem_principal = self.nome_pagina
                 if not f0 or nova:
                     self.emitir("personagens", self.personagens())
             elif self._eh_objetivo(fala):
