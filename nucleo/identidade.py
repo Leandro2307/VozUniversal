@@ -421,17 +421,22 @@ def pistas_voz(res):
     quanto um nome claro ("Dona", "Rei"); com certeza baixa quase nada (musica, duas vozes)."""
     if not res or not res.get("sexo") or res.get("certeza", 0) < 0.25:
         return []
-    f0 = res.get("f0") or 0
+    p_m = float(res.get("p_m", 0.5))
+    chance = p_m if res["sexo"] == "m" else 1 - p_m
     saida = [("s", res["sexo"], round(3.0 * res["certeza"], 2),
-              f"voz original {'masculina' if res['sexo'] == 'm' else 'feminina'} ({f0:.0f} Hz)")]
+              f"voz original {'masculina' if res['sexo'] == 'm' else 'feminina'} ({chance * 100:.0f}%)")]
     if res.get("crianca", 0) >= 0.5 and res["certeza"] >= 0.4:
-        saida.append(("i", "crianca", round(1.5 * res["crianca"], 2), f"voz original de criança ({f0:.0f} Hz)"))
+        saida.append(("i", "crianca", round(1.5 * res["crianca"], 2),
+                      f"voz original de criança ({res['crianca'] * 100:.0f}%)"))
     return saida
 
 
 # ----------------------------------------------------------------- elenco: fichas + escolha de voz
-VARIACOES = [(1.0, 1.0), (1.06, 0.97), (0.94, 1.03), (1.1, 1.0), (0.9, 0.98), (1.03, 1.06), (0.97, 0.94),
-             (1.13, 1.03), (0.88, 1.02), (1.08, 0.93)]
+# tom (reamostragem) so +-5%: acima disso a voz fica fina/robotica ("tom 1.13" soava feio, 19/11).
+# Os personagens se diferenciam mais pela voz do banco e pelo ritmo.
+TOM_AUTO = (0.95, 1.05)
+VARIACOES = [(1.0, 1.0), (1.03, 0.97), (0.97, 1.03), (1.05, 1.0), (0.95, 0.98), (1.02, 1.06), (0.98, 0.94),
+             (1.04, 1.03), (0.96, 1.02), (1.01, 0.93)]
 PRIOR = {"s": {"m": 0.3, "f": 0.0}, "i": {"crianca": 0.0, "adulto": 0.6, "idoso": 0.0}}
 
 
@@ -456,7 +461,16 @@ class Elenco:
             return 1 / (1 + math.exp(-(d[k] - max(outros))))
 
         conf = certeza(s, sexo) * certeza(i, idade)
-        return categoria_de(sexo, idade), conf
+        return categoria_de(sexo, idade), conf, certeza(s, sexo)
+
+    @staticmethod
+    def _certeza_troca(atual, cat, conf, conf_sexo):
+        """Certeza para TROCAR de categoria. Se o que muda e o sexo, vale so a certeza do sexo: sem
+        pista de idade a certeza total para em ~65% e a troca tardia (>= 70-80%) nunca acontecia
+        (19/11: "Segurança" com 15 pontos de homem x 3 de mulher continuou com voz de mulher)."""
+        if atual and _sexo_da_categoria(atual) != _sexo_da_categoria(cat):
+            return conf_sexo
+        return conf
 
     def _voz_para(self, nome, categoria):
         """Escolhe a voz da categoria menos usada no jogo e uma variacao de tom/ritmo que
@@ -486,7 +500,7 @@ class Elenco:
             tom, vel = VARIACOES[(ini + k) % len(VARIACOES)]
             if (voz, round(tom, 2), round(vel, 2)) not in usadas:
                 return voz, tom, vel
-        return voz, round(1.0 + (semente % 21 - 10) / 100, 2), 1.0
+        return voz, round(1.0 + (semente % 11 - 5) / 100, 2), round(1.0 + (semente // 11 % 13 - 6) / 100, 2)
 
     # -- API
     def ficha(self, nome):
@@ -523,7 +537,7 @@ class Elenco:
                 if motivo not in f["pistas"]:
                     f["pistas"] = (f["pistas"] + [motivo])[-8:]
             if not f.get("fixo"):
-                cat, conf = self._decidir(pontos)
+                cat, conf, conf_s = self._decidir(pontos)
                 g = sexo_do_nome(nome)
                 forcado = False
                 if g and _sexo_da_categoria(cat) != g:
@@ -533,7 +547,8 @@ class Elenco:
                 # troca de voz so no comeco (depois de muitas falas, so se o usuario mudar)
                 # ...ou UMA vez mais tarde, se as pistas novas forem fortes (o Jack so chamou "mamãe"
                 # depois de 6 falas e ficou com voz de homem adulto)
-                tarde = (f["falas"] > 6 and conf >= 0.7 and not f.get("mudou_tarde") and not f.get("fixo"))
+                troca = self._certeza_troca(f.get("categoria"), cat, conf, conf_s)
+                tarde = (f["falas"] > 6 and troca >= 0.7 and not f.get("mudou_tarde") and not f.get("fixo"))
                 if cat != f.get("categoria") and (f.get("categoria") is None or f["falas"] <= 6 or tarde or forcado):
                     if f["falas"] > 6:
                         f["mudou_tarde"] = True
@@ -543,6 +558,9 @@ class Elenco:
                     f["voz"], f["tom"], f["vel"] = self._voz_para(nome, cat)
             if not f.get("voz") or f["voz"] not in self.banco.vozes:
                 f["voz"], f["tom"], f["vel"] = self._voz_para(nome, f["categoria"])
+            if not f.get("fixo"):
+                # fichas antigas tinham tom automatico ate 0,88-1,13 (voz fina/feia); o do usuario fica
+                f["tom"] = max(TOM_AUTO[0], min(TOM_AUTO[1], float(f.get("tom", 1.0))))
             try:
                 from .diagnostico import diag
                 if novo or pistas:
@@ -577,10 +595,11 @@ class Elenco:
                 d = pontos.setdefault(dim, {})
                 d[val] = round(d.get(val, 0) + peso, 2)
                 f["pistas"] = (f.get("pistas", []) + [motivo])[-8:]
-            cat, conf = self._decidir(pontos)
+            cat, conf, conf_s = self._decidir(pontos)
             f["confianca"] = round(conf, 2)
             tarde = f.get("falas", 0) > 6
-            if cat != f.get("categoria") and (not tarde or (conf >= 0.8 and not f.get("mudou_tarde"))):
+            troca = self._certeza_troca(f.get("categoria"), cat, conf, conf_s)
+            if cat != f.get("categoria") and (not tarde or (troca >= 0.8 and not f.get("mudou_tarde"))):
                 if tarde:
                     f["mudou_tarde"] = True
                 if f.get("categoria"):

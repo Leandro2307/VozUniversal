@@ -14,10 +14,10 @@ from PIL import Image
 
 from .diagnostico import diag
 from .identidade import Elenco, ROTULOS, Visao
-from .leitor import Leitor
+from .leitor import Leitor, dividir_frases
 from .perfil import Perfil
 from .tela import (Descobridor, DetectorVideo, Dicionario, eh_relogio,Janela, achar_legenda, capturar, em_ordem, limpar, ocr_linhas, regiao_em_tela,
-                   separar_nome, nome_estavel, suavizar, isolar_contorno)
+                   separar_nome, separar_falantes, eh_figurante, tirar_idioma, nome_estavel, suavizar, isolar_contorno)
 from .util import FIM, gravar_json, CONFIG, historico_log, log, normalizar, ouvir_log, semelhanca
 from .vozes import Banco, Narrador
 
@@ -662,7 +662,16 @@ class Nucleo:
         self.legenda_frac = [(vx0 + x0 / esc) / w, (topo + y0 / esc) / h, (vx0 + x1 / esc) / w, (topo + y1 / esc) / h]
         self._quadro = (img, (x0, y0, x1, y1))
         nome, corpo = separar_nome(bloco)          # "Swanson: A Abigail disse..." -> Swanson
-        texto = limpar(" ".join(l[0] for l in corpo))
+        falantes = separar_falantes(bloco)
+        if len(falantes) >= 2:
+            # varias legendas empilhadas, de pessoas diferentes (multidao): a de BAIXO segue o caminho
+            # normal (leitor); as de cima viram falas proprias, cada uma na voz de quem fala
+            # (ver _falar_empilhadas). Antes iam todas na voz da 1a, com o "Pessoa local:" falado junto
+            nome, ult = falantes[-1]
+            corpo = [(ult, 0, 0, 1, 1)]
+            self._empilhadas = [(n, self.dic.consertar(limpar(t)) if self.dic.ok else limpar(t))
+                                for n, t in falantes[:-1]]
+        texto = tirar_idioma(limpar(" ".join(l[0] for l in corpo)))
         if nome and " " in nome and self.perfil:
             # nome partido pelo OCR ("Du tch" = Dutch, 15/11): junto, e alguem conhecido?
             junto = "".join(nome.split())
@@ -977,6 +986,87 @@ class Nucleo:
             return True
         except Exception:
             return True
+
+    def _falar_empilhadas(self, agora):
+        """Legendas de CIMA de um bloco empilhado (multidao, ver separar_falantes): cada uma na voz de
+        quem fala. Ficam na tela enquanto as de baixo aparecem, entao: so fala o que leu igual em 2
+        leituras (nao e sujeira do OCR) e so as frases que ainda nao foram ditas (nem por aqui, nem
+        pelo leitor quando ela era a legenda de baixo). Figurante com alguem falando vai por baixo."""
+        vistas = {k: v for k, v in getattr(self, "_emp_vistas", {}).items() if agora - v[0] < 20}
+        self._emp_vistas = vistas
+        ditas = getattr(self, "_emp_ditas", None)
+        if ditas is None:
+            ditas = self._emp_ditas = collections.deque(maxlen=60)
+
+        def palavras(t):
+            return {normalizar(w) for w in t.split() if len(normalizar(w)) >= 3}
+
+        def ja_dita(fr):
+            n, pf = normalizar(fr), palavras(fr)
+            try:
+                faladas = list(self.narr.recentes)     # (a thread da voz mexe nela ao mesmo tempo)
+            except RuntimeError:
+                faladas = []
+            recentes = [(n0, p0, t0) for n0, p0, t0 in ditas] + faladas
+            # ...ou lida ha pouco como a legenda de BAIXO (o leitor cuida dela, na voz certa). No meio
+            # da multidao o OCR juntava a linha de cima com a de baixo ("Pessoa local: Ãh, não, sério?
+            # quero machucar ninguém" era da Lucia, 18/11)
+            # (so a que ficou embaixo em 3+ leituras: uma leitura so nao foi falada pelo leitor e
+            # apagava "Que bairro de merda" e "Ah! Tá, tá, só fica calma" no teste de 20/11)
+            baixo = [(normalizar(tx), tx, t0) for tx, t0 in
+                     zip(list(getattr(self, "ult_nomes_txt", [])), list(getattr(self, "ult_nomes_t", [])))
+                     if tx and agora - t0 <= 4 and t0 < agora]
+            for nb, tx, t0 in baixo:
+                if sum(1 for nb2, _, _ in baixo if nb2 == nb or semelhanca(nb, nb2) >= 0.85) >= 3:
+                    recentes.append((nb, palavras(tx), t0))
+            for n0, p0, t0 in recentes:
+                if agora - t0 > 25 or not n0:
+                    continue
+                if n == n0 or (min(len(n), len(n0)) >= 8 and (n in n0 or n0 in n)):
+                    return True
+                if min(len(n), len(n0)) >= 6 and semelhanca(n, n0) >= 0.75:
+                    return True
+                # mesma frase lida com lixo do OCR ("AAn, não, sério? quero machucar ninguém." era
+                # "Olha, não quero machucar ninguém.", ja dita quando era a legenda de baixo)
+                if len(pf) >= 2 and len(pf & set(p0)) >= 0.6 * len(pf):
+                    return True
+            return False
+
+        for nome_e, txt in self._empilhadas:
+            n = normalizar(txt)
+            if len(n) < 4:
+                continue
+            chave = next((k for k in vistas if semelhanca(k, n) >= 0.75), n)
+            v = vistas.setdefault(chave, [agora, collections.Counter(), nome_e, txt, False])
+            v[1][txt] += 1
+            if nome_e:
+                v[2] = nome_e
+            # fica com a leitura que mais se repetiu (o OCR erra cada vez num lugar diferente)
+            v[3] = max(v[1], key=lambda x: (v[1][x], Leitor._nota(x)))
+            if sum(v[1].values()) < 2 or v[4]:
+                continue
+            v[4] = True
+            frases = [fr for fr in dividir_frases(v[3]) if len(normalizar(fr)) >= 2 and not ja_dita(fr)]
+            for fr in frases:
+                ditas.append((normalizar(fr), palavras(fr), agora))
+            if not frases:
+                continue
+            quem = self._nome_canonico(v[2]) if v[2] else ""
+            if not quem:
+                ant = getattr(self, "_ult_fala", None)
+                quem = ant[0] if ant and ant[0] and agora - ant[2] < 6 else ""
+            fig = eh_figurante(quem)
+            fundo = fig and self.narr.ocupado()
+            diag.ev("legenda_empilhada", quem=quem, texto=" ".join(frases)[:80], figurante=fig, fundo=fundo)
+            if quem and self.elenco:
+                f = self.elenco.observar(quem, " ".join(frases))
+                for i, fr in enumerate(frases):
+                    self.narr.falar(fr, f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), quem=quem,
+                                    categoria=f["categoria"], nova=i == 0, visto=v[0], figurante=fig, fundo=fundo)
+                self.emitir("personagens", self.personagens())
+            else:
+                for i, fr in enumerate(frases):
+                    self.narr.falar(fr, "narrador", quem="", categoria="narrador", nova=i == 0, visto=v[0])
 
     def _nome_na_fala(self, fala):
         """Ultima rede antes de falar: nome de personagem CONHECIDO que sobrou no comeco da fala
@@ -1455,6 +1545,7 @@ class Nucleo:
                 log("📍 Achei a caixa de diálogo! (dá para ajustar no painel)", tipo="ok")
                 self.avisar_estado()
             return
+        self._empilhadas = []
         texto, nome = (self._ler_legenda(sct, self.area) if self._modo_legenda()
                        else self._ler(sct, self.area))
         if texto is None:
@@ -1491,6 +1582,8 @@ class Nucleo:
             if texto and getattr(self, "_quadro", None):
                 self._salvar_quadro(texto)
             self.emitir("lido", {"texto": texto, "nome": nome})
+        if texto and self._empilhadas:
+            self._falar_empilhadas(agora)       # as de cima primeiro (estao na tela antes da de baixo)
         for fala, nova, visto in self._separar_dialogo(self.leitor.tick(texto, agora)):
             if len(re.sub(r"[\W\d_]", "", fala)) < 2:      # "i", "-", "4": sujeira do OCR
                 diag.ev("descartei", motivo="curta demais", texto=fala)
@@ -1573,8 +1666,13 @@ class Nucleo:
                         prob = self.visao.classificar(self._olhar(sct, self.area, reg_v))
                     # (se ainda nao esta pronta, _talvez_carregar_visao carrega num momento calmo)
                 f = self.elenco.observar(self.nome_pagina, fala, prob)
+                fig = eh_figurante(self.nome_pagina)
+                if nova:
+                    # figurante ("Pessoa local") com alguem ja falando: vai por baixo, sem fila
+                    self._fundo_atual = fig and self.narr.ocupado()
                 self.narr.falar(fala, f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), quem=self.nome_pagina,
-                                categoria=f["categoria"], nova=nova, visto=visto)
+                                categoria=f["categoria"], nova=nova, visto=visto, figurante=fig,
+                                fundo=fig and getattr(self, "_fundo_atual", False))
                 if not f0 or nova:
                     self.emitir("personagens", self.personagens())
             elif self._eh_objetivo(fala):

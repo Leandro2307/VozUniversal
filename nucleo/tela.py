@@ -1335,6 +1335,99 @@ def separar_nome(linhas, zona_nome=None, tam=None):
     return "", linhas
 
 
+# cargo no meio do bloco com o ":" estragado pelo OCR ("Pessoa loeal;. Que bairro...", 18/11)
+_PAPEL_TOLERANTE = re.compile(r"(?:^|\s)([A-ZÀ-Ý][a-zà-ÿ]{2,14}(?: [a-zà-ÿ]{3,15})?(?: \d{1,2})?)\s*[:;][.,]?\s+"
+                              r"(?=[A-ZÀ-Ý\"'“«¿¡\-–—.…])")
+_PAPEL_2A = ("local", "locais", "desconhecida", "desconhecido", "desconhecidas", "desconhecidos", "penal")
+# figurante: gente da rua / multidao (fala de fundo, a primeira a ser pulada quando a voz atrasa)
+_FIGURANTES = {"pessoa", "pessoas", "transeunte", "transeuntes", "pedestre", "pedestres", "turista", "turistas",
+               "cliente", "clientes", "vizinho", "vizinha", "vizinhos", "multidão", "multidao", "fã", "fãs",
+               "manifestante", "manifestantes", "torcedor", "torcedora", "torcedores", "frequentador",
+               "frequentadora", "frequentadores", "banhista", "banhistas"}
+
+
+def eh_figurante(nome):
+    """ "Pessoa local", "Pessoas locais", "Transeunte", "Turista 2": gente da multidao, sem nome."""
+    ps = (nome or "").lower().split()
+    return bool(ps) and ps[0] in _FIGURANTES
+
+
+def _papel_canonico(nome):
+    """ "Pessoa beal" / "Pessoa loeal" / "Pessoa penal" -> "Pessoa local" (2a palavra estragada pelo OCR)."""
+    ps = nome.split()
+    if len(ps) >= 2 and not ps[1].isdigit():
+        p0 = ps[0].lower()
+        cands = (("local", "locais", "desconhecida", "desconhecido", "desconhecidas", "desconhecidos")
+                 if p0.startswith("pessoa") else ("penal",) if p0.startswith("polic") else _PAPEL_2A)
+        if ps[1] not in cands:
+            melhor = max(cands, key=lambda w: difflib.SequenceMatcher(None, ps[1], w).ratio())
+            # "Pessoa" so tem 3 opcoes bem diferentes: "beal" (0,44 de local) ja e local
+            if difflib.SequenceMatcher(None, ps[1], melhor).ratio() >= (0.4 if p0.startswith("pessoa") else 0.6):
+                ps[1] = melhor
+    return " ".join(ps)
+
+
+_IDIOMA = re.compile(r"^[\s(\[]*(?:espanhol|ingl[eê]s|franc[eê]s|italiano|alem[aã]o|russo|chin[eê]s|japon[eê]s|"
+                     r"coreano|[aá]rabe|crioulo|portugu[eê]s)[\s)\]]*[:'’\"]*\s+(?=\S)", re.I)
+
+
+def tirar_idioma(t):
+    """ "Espanhol ' Ai, Santa Bárbara..." / "(Espanhol) Ai..." -> "Ai, Santa Bárbara...": a etiqueta
+    de idioma da legenda nao e fala (era lida em voz alta)."""
+    return _IDIOMA.sub("", t, count=1)
+
+
+def separar_falantes(linhas):
+    """Bloco com VARIAS legendas empilhadas (multidao: "Lucia: Dinheiro no balcão! Pessoa local: Que
+    bairro de merda. Atendente: Tá, tá...") -> [(nome, texto), ...] na ordem da tela, um por pessoa.
+    O separar_nome fica so com a ULTIMA (a de baixo); as de cima se perdiam ou saiam todas na voz da
+    primeira, com o "Pessoa local:" falado junto (GTA 6, 18/11 00:15). Sem nome no meio: 1 item."""
+    if not linhas:
+        return []
+    linhas = [consertar_prefixo(l) for l in linhas]
+    tudo = " ".join(l[0] for l in linhas).strip()
+    from .identidade import nomes_proprios
+    marcas = []
+    for m in _NOME_NO_MEIO.finditer(tudo):
+        if _cara_de_nome(m.group(1)):
+            marcas.append((m.start(1), m.end(1), m.group(1), False))
+    for m in _NOME_NO_MEIO_SOLTO.finditer(tudo):
+        if m.group(1).lower() in nomes_proprios():
+            marcas.append((m.start(1), m.end(1), m.group(1), False))
+    for m in _PAPEL_TOLERANTE.finditer(tudo):
+        if m.start(1) > 0 and _eh_papel(m.group(1)):
+            marcas.append((m.start(1), m.end(1), _papel_canonico(m.group(1)), True))
+    def fala_comeca_bem(fim_nome):
+        # a fala depois do "Nome:" comeca com Maiuscula/aspas: "Brian: Ah. Certo: esqueci que..." nao
+        # tem uma pessoa "Certo"
+        resto = re.sub(r"^\s*[:;][.,]?\s*", "", tudo[fim_nome:])
+        return bool(re.match(r"[A-ZÀ-Ý\"'“«¿¡\-–—.…(\[]", resto))
+
+    marcas = sorted(m for m in marcas if m[0] > 0 and fala_comeca_bem(m[1]))
+    unicas = []
+    for mk in marcas:
+        if not unicas or mk[0] >= unicas[-1][1]:
+            unicas.append(mk)
+    if not unicas:
+        nome, corpo = separar_nome(linhas)
+        return [(nome, tirar_idioma(" ".join(l[0] for l in corpo).strip()))]
+    saida = []
+    cab = tudo[:unicas[0][0]].strip()
+    if cab:
+        n0, c0 = separar_nome([(cab, 0, 0, 1, 1)])
+        t0 = " ".join(l[0] for l in c0).strip()
+        if re.search(r"\w", t0):
+            saida.append((n0, t0))
+    for k, (ini, fim_nome, nome, _papel) in enumerate(unicas):
+        sep = re.match(r"\s*[:;][.,]?\s*", tudo[fim_nome:])
+        comeco = fim_nome + (sep.end() if sep else 0)
+        ate = unicas[k + 1][0] if k + 1 < len(unicas) else len(tudo)
+        txt = tirar_idioma(tudo[comeco:ate].strip())
+        if re.search(r"\w", txt):
+            saida.append((nome.strip(), txt))
+    return saida or [("", tudo)]
+
+
 def nome_estavel(ultimos):
     """Nome de quem fala a partir das ultimas leituras (o OCR do nome falha as vezes)."""
     l = [n for n in ultimos if n]

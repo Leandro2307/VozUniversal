@@ -37,8 +37,37 @@ def expandir_abreviacoes(t):
     return _RE_ABREV.sub(lambda m: ABREVIACOES[m.group(1)], t)
 
 
+# "É" maiusculo perde o acento no OCR e a voz lia "e" (conjuncao): "E um assalto!" (GTA 6, 20/11).
+# So vira "É" no comeco da frase e quando o que vem depois so faz sentido com o verbo.
+_E_VERBO = ("claro|sério|serio|verdade|melhor|pior|foda|tarde|cedo|demais|possível|impossível|fácil|"
+            "difícil|perigoso|perigosa|óbvio|normal|estranho|estranha|engraçado|engraçada|legal|errado|"
+            "errada|culpa|hora|nóis|nois|tipo isso|o seguinte|isso aí|isso ai|isso mesmo|agora ou nunca|"
+            "minha vez|sua vez|nossa vez|pra já|pra ja|por isso|lógico|logico|uma pena|um prazer")
+# ...e estas so com a frase acabando logo depois ("E isso." = "É isso.", mas "E isso que você fez?";
+# "É mesmo?", mas "E mesmo assim..."; "É meu!", mas "E meu irmão?")
+_E_VERBO_FIM = "isso|mesmo|assim|sempre|bom|boa|ruim|certo|certa|justo|meu|minha|seu|sua|nosso|nossa|dele|dela"
+_RE_E_VERBO = re.compile(r"(^|[.!?…]\s+)E(?=\s+(?:(?:" + _E_VERBO + r")(?=[\s.,!?…]|$)|(?:"
+                         + _E_VERBO_FIM + r")\s*[.!?…]))")
+# "E um/uma X!" curtinho ("E um assalto!", "E uma cilada.") tambem e "É"
+_RE_E_UM = re.compile(r"(^|[.!?…]\s+)E(?=\s+uma?\s+[\wÀ-ÿ-]+(?:\s+[\wÀ-ÿ-]+)?\s*[.!?…])")
+
+
+# outras palavras que o OCR (ou a legenda) deixa sem acento e a voz le errado (log de 13 mil falas, 20/11):
+# "Aonde você ta indo?" (ta = "tá"), "e dai você mata" (daí)
+_RE_TA = re.compile(r"\b(você|voce|cê|ce|ele|ela|eles|elas|isso|isto|tudo|que|onde|aonde|quem|não|nao|"
+                    r"já|ja|aqui|ali|lá|ainda|sempre|tu|gente)(\s+)ta\b", re.I)
+_RE_DAI = re.compile(r"\b([Dd])ai\b(?!-)")
+
+
+def acentuar_e(t):
+    t = _RE_E_VERBO.sub(r"\1É", t)
+    t = _RE_E_UM.sub(r"\1É", t)
+    t = _RE_TA.sub(r"\1\2tá", t)
+    return _RE_DAI.sub(lambda m: m.group(1) + "aí", t)
+
+
 def preparar_fala(texto):
-    t = expandir_abreviacoes(texto)
+    t = acentuar_e(expandir_abreviacoes(texto))
     t = re.sub(r"[\"“”«»`´]", "", t)
     t = re.sub(r"(?<!\w)'|'(?!\w)", "", t)
     t = re.sub(r"^[\s\-–—•·*_|]+", "", t)
@@ -1399,6 +1428,14 @@ class Narrador:
         self.saida_nome = ""
         self.saida_trocou = None  # nome do aparelho novo -> o _tocar reabre o audio nele
         self.espelho = None       # fn(bloco, sr): copia de cada pedaco tocado (Sala 3D, nucleo/sala.py)
+        # CAMADA DE FUNDO: fala de figurante ("Pessoa local") enquanto alguem importante fala sai por
+        # baixo, mais baixa, misturada na voz principal (burburinho de multidao), sem entrar na fila
+        # e sem atrasar a Lucia/Jason (GTA 6, 18/11 00:15: 3-5 legendas empilhadas no assalto)
+        self.fundo = np.zeros(0, np.float32)
+        self.trava_fundo = threading.Lock()
+        self.fundo_ids = set()       # ids de fala que vao para o fundo
+        self.fundo_cortados = set()  # falas de fundo atrasadas demais (o resto delas nao toca)
+        self.pags_figurante = set()  # legendas (pag) de figurante na fila principal: puladas primeiro
         threading.Thread(target=self._sintetizar, daemon=True).start()
         threading.Thread(target=self._tocar, daemon=True).start()
         threading.Thread(target=self._vigiar_saida, daemon=True, name="saida").start()
@@ -1456,13 +1493,20 @@ class Narrador:
             return vid, 1.0, 1.0
         return voz, tom, vel
 
-    def falar(self, texto, voz, tom=1.0, vel=1.0, quem="", categoria="", nova=True, visto=None, forcar=False):
+    def ocupado(self):
+        """Tem voz principal tocando ou esperando (gerando ou na fila de som)."""
+        return self._tocando_agora() or not self.fila.empty() or not self.audio.empty()
+
+    def falar(self, texto, voz, tom=1.0, vel=1.0, quem="", categoria="", nova=True, visto=None, forcar=False,
+              figurante=False, fundo=False):
         """nova=True: comecou uma fala/legenda nova.
 
         Sem cortar (padrao): a fala anterior ACELERA para alcancar e a nova entra logo depois, em
         velocidade normal. Se encavalarem (uma tocando, outra esperando e chega a nova), a do MEIO so
         e pulada se ja estiver atrasada demais: a que toca termina sem corte (ver _pular_meio).
-        Com "interromper_ao_avancar": corta a anterior na hora (jeito antigo)."""
+        Com "interromper_ao_avancar": corta a anterior na hora (jeito antigo).
+        figurante=True: gente da multidao; atrasou (`pular_figurante_s`), e a primeira a ser pulada.
+        fundo=True: toca POR BAIXO da voz principal, mais baixa, sem entrar na fila dela."""
         self.seq += 1
         voz, tom, vel = self._voz_unica(voz, tom, vel)
         if voz == "narrador":
@@ -1471,9 +1515,17 @@ class Narrador:
             d = self.banco.vozes.get("narrador") or {}
             tom, vel = tom * float(d.get("tom", 1.0)), vel * float(d.get("velocidade", 1.0))
         diag.ev("fala", id=self.seq, texto=texto, voz=voz, quem=quem, nova=nova,
-                espera_ms=round((time.time() - (visto or time.time())) * 1000))
+                espera_ms=round((time.time() - (visto or time.time())) * 1000),
+                **({"fundo": True} if fundo else {}), **({"figurante": True} if figurante else {}))
+        if fundo and self.cfg.get("fundo_multidao", True):
+            self.fundo_ids.add(self.seq)
+            self.fila.put((self.ger, self.pag, texto, voz, tom, vel, quem, categoria, visto or time.time(), forcar, self.seq))
+            return
         if nova:
             self.pag += 1
+            if figurante:
+                self.pags_figurante.add(self.pag)
+                self.pags_figurante = {p for p in self.pags_figurante if p > self.pag - 50}
             self.chegada[self.pag] = time.time()
             if self.cfg.get("interromper_ao_avancar", False):
                 self.tol = float(self.cfg.get("tolerancia_fim_s", 1.0))
@@ -1490,6 +1542,8 @@ class Narrador:
     def calar(self):
         self.tol = 0.0
         self.ger += 1
+        with self.trava_fundo:
+            self.fundo = np.zeros(0, np.float32)
 
     def _tocando_agora(self):
         """A fala `tocando` ainda esta saindo no alto-falante (ou entre dois pedacos dela)."""
@@ -1512,8 +1566,7 @@ class Narrador:
         if not pend:
             return
         atual = pend[0]
-        limite = float(self.cfg.get("pular_atrasada_s", 3.0))
-        meio = [p for p in pend[1:] if limite > 0 and agora - self.chegada.get(p, agora) >= limite]
+        meio = [p for p in pend[1:] if 0 < self._limite_atraso(p) <= agora - self.chegada.get(p, agora)]
         for p in meio:
             self.puladas.add(p)
             diag.ev("pulou_meio", pag=p, tocando=atual, nova=novo, atraso_s=round(agora - self.chegada.get(p, agora), 2))
@@ -1523,11 +1576,19 @@ class Narrador:
             self.pular_ate = max(self.pular_ate, atual + 1)
         self.puladas = {p for p in self.puladas if p >= self.pular_ate and p > novo - 50}
 
+    def _limite_atraso(self, pag):
+        """Quanto uma legenda que ainda nao comecou pode atrasar antes de ser pulada: figurante
+        (multidao) bem menos que quem importa, para a voz nao ficar atras da Lucia/Jason."""
+        lim = float(self.cfg.get("pular_atrasada_s", 3.0))
+        if pag in getattr(self, "pags_figurante", ()) and lim > 0:
+            return min(lim, float(self.cfg.get("pular_figurante_s", 1.0)))
+        return lim
+
     def _atrasada_demais(self, pag, info):
         """Na hora de COMECAR uma fala: ja tem legenda mais nova esperando e esta sairia
         `pular_atrasada_s` atrasada (desde o inicio ideal, ver _inicio_ideal) -> pula inteira: o que
         esta na tela agora ja e outra coisa."""
-        lim = float(self.cfg.get("pular_atrasada_s", 3.0))
+        lim = self._limite_atraso(pag)
         if lim <= 0 or pag >= self.pag or not info.get("visto"):
             return False
         return time.time() - self._inicio_ideal(pag, info["visto"]) >= lim
@@ -1542,16 +1603,17 @@ class Narrador:
             return
         plano = list(self.cfg.get("xtts_pedacos") or [8, 12, 20, 32])
         p0 = plano[0]
+        piso = int(self.cfg.get("xtts_pedaco_min", 8))    # 1o pedaco maior = menos emenda no comeco da frase
         if fid in self.com_buraco:
             self.com_buraco.discard(fid)
             self.sem_buraco = 0
-            novo = min(16, p0 + 2)
+            novo = min(max(16, piso + 4), p0 + 2)
         else:
             self.sem_buraco += 1
             if self.sem_buraco < 8:
                 return
             self.sem_buraco = 0
-            novo = max(8, p0 - 1)
+            novo = max(piso, p0 - 1)
         if novo != p0:
             self.cfg["xtts_pedacos"] = [novo, novo + 4, novo + 12, 32]
             diag.ev("auto_pedacos", de=plano, para=self.cfg["xtts_pedacos"])
@@ -1621,6 +1683,17 @@ class Narrador:
         p = 1.22 if atraso > 3.0 else 1.12 if atraso > 1.6 else 1.0
         return p
 
+    def _para_tocador(self, item):
+        """Pedaco gerado -> fila do alto-falante. Fala de FUNDO vai direto para a camada de fundo:
+        na fila ela esperava cada pedaco da voz principal acabar e o burburinho saia engasgado
+        ("lagado", teste de 20/11)."""
+        ger, _pag, w, sr, info = item
+        fid = (info or {}).get("id")
+        if fid in self.fundo_ids:
+            self._para_fundo(ger, w, sr, info, fid)
+        else:
+            self.audio.put(item)
+
     def _sintetizar(self):
         """Pega as falas da fila. Na voz rapida, GERA AS PROXIMAS AO MESMO TEMPO que a atual (ate
         `falas_em_paralelo`), e entrega o som na ordem. Antes era uma de cada vez: com o jogo, a voz
@@ -1629,7 +1702,7 @@ class Narrador:
         while True:
             item = self.fila.get()
             if not self._paralelo():
-                self._processar(item, self.audio.put)
+                self._processar(item, self._para_tocador)
                 continue
             pend = collections.deque([self._iniciar_tarefa(item)])
             while pend:
@@ -1647,7 +1720,7 @@ class Narrador:
                         continue
                     if x is None:
                         break
-                    self.audio.put(x)
+                    self._para_tocador(x)
                 pend.popleft()
 
     def previa(self, texto, voz="narrador", tom=1.0, vel=1.0, quem="", cat=""):
@@ -1978,6 +2051,44 @@ class Narrador:
             diag.ev("colchao", id=fid, esperou_ms=round(esperou * 1000), taxa=round(taxa, 2),
                     previsto_s=round(previsto, 1))
 
+    def _para_fundo(self, ger, wav, sr, info, fid):
+        """Pedaco de uma fala de FUNDO (figurante): vai para a camada que o _escrever_mix soma
+        por baixo da voz principal. Nao espera a fila: entra na hora, mais baixo."""
+        info = info or {}
+        if wav is None:
+            self.fundo_ids.discard(fid)
+            self.fundo_cortados.discard(fid)
+            diag.ev("tocar_fim", id=fid, fundo=True)
+            return
+        if ger != self.ger or fid in self.fundo_cortados:
+            return
+        if info.get("primeiro"):
+            atraso = time.time() - (info.get("visto") or time.time())
+            lim = float(self.cfg.get("pular_atrasada_s", 3.0))
+            if lim > 0 and atraso >= lim:
+                self.fundo_cortados.add(fid)     # burburinho atrasado nao faz sentido: some
+                diag.ev("pulou_fundo", id=fid, atraso_s=round(atraso, 2))
+                return
+            diag.ev("tocar_inicio", id=fid, atraso_ms=round(atraso * 1000), fundo=True)
+            log(f"🔉 [{info.get('quem', '')} · {info.get('voz_nome', '')}] {info.get('texto', '')}   "
+                f"(fundo, voz em {round(atraso * 1000)} ms)", tipo="fala")
+        if sr != self.SR:
+            wav = np.interp(np.arange(0, len(wav), sr / self.SR), np.arange(len(wav)), wav).astype(np.float32)
+        ganho = float(self.cfg.get("fundo_volume", 0.55))
+        with self.trava_fundo:
+            self.fundo = np.concatenate([self.fundo, np.asarray(wav, np.float32).reshape(-1) * ganho])
+
+    def _escrever_mix(self, bloco, sr):
+        """Escreve no alto-falante somando a camada de fundo (figurantes) por baixo."""
+        if len(self.fundo):
+            with self.trava_fundo:
+                k = min(len(bloco), len(self.fundo))
+                f, self.fundo = self.fundo[:k], self.fundo[k:]
+            bloco = np.array(bloco, np.float32).reshape(-1)
+            bloco[:k] += f
+            np.clip(bloco, -1.0, 1.0, out=bloco)
+        self._escrever(bloco, sr)
+
     def _tocar(self):
         while True:
             try:
@@ -1986,15 +2097,18 @@ class Narrador:
                 if self.falando and time.time() - (self.ult_fim_toque or 0) > 0.4:
                     self.falando = False
                     self.aviso("calado", {})
-                if self.cfg.get("manter_audio_ligado", True):
+                if self.cfg.get("manter_audio_ligado", True) or len(self.fundo):
                     # manda silencio sem parar: placa/fone (Bluetooth, HDMI, USB) nunca "dorme",
-                    # entao o comeco da proxima fala nao se perde
+                    # entao o comeco da proxima fala nao se perde (e o fundo toca nesse "silencio")
                     try:
-                        self._escrever(np.zeros(int(self.SR * 0.02), np.float32), self.SR)
+                        self._escrever_mix(np.zeros(int(self.SR * 0.02), np.float32), self.SR)
                     except Exception:
                         time.sleep(0.02)
                 continue
             fid = (info or {}).get("id")
+            if fid in self.fundo_ids:
+                self._para_fundo(ger, wav, sr, info, fid)
+                continue
             if wav is None:                       # fim da fala: nao espera mais pedacos dela
                 self.gerando_fim.add(fid)
                 if pag == self.tocando:
@@ -2082,13 +2196,13 @@ class Narrador:
                             terminar = True
                         else:
                             fim = min(n, i + int(sr * 0.06))
-                            self._escrever(wav[i:fim] * np.linspace(1, 0, fim - i, dtype=np.float32), sr)
+                            self._escrever_mix(wav[i:fim] * np.linspace(1, 0, fim - i, dtype=np.float32), sr)
                             break
                     # ficou 2 falas atras: some suave e pula. Mas se falta menos de 1 s do pedaco, termina
                     # (15/11: cortou o "vamos saindo?" do fim com so 0,58 s faltando)
                     if (pag < self.pular_ate or pag in self.puladas) and (n - i) / sr > float(self.cfg.get("terminar_se_falta_s", 1.0)):
                         fim = min(n, i + int(sr * 0.08))
-                        self._escrever(wav[i:fim] * np.linspace(1, 0, fim - i, dtype=np.float32), sr)
+                        self._escrever_mix(wav[i:fim] * np.linspace(1, 0, fim - i, dtype=np.float32), sr)
                         log("⏭ Pulei o resto de uma fala que ficou muito atrás da tela.", tipo="aviso")
                         diag.ev("pulou", id=fid, resto_s=round((n - i) / sr, 2))
                         break
@@ -2100,7 +2214,7 @@ class Narrador:
                             wav = np.concatenate([wav[:i], acelerar(wav[i:], novo / ritmo, sr)])
                             n, ritmo = len(wav), novo
                             diag.ev("acelerou", id=fid, fator=round(novo, 2))
-                    self._escrever(wav[i:i + bloco], sr)
+                    self._escrever_mix(wav[i:i + bloco], sr)
                     i += bloco
                 self.ult_id, self.ult_fim_toque, self.ritmo_fala = fid, time.time(), ritmo
                 self.no_toque = False

@@ -432,6 +432,63 @@ confere("na hora de tocar: atrasada com legenda nova esperando pula",
 confere("na hora de tocar: pouco atrasada toca", _nv2._atrasada_demais(9, {"visto": _t.time() - 1.0}), False)
 confere("na hora de tocar: a mais nova nunca pula", _nv2._atrasada_demais(10, {"visto": _t.time() - 9.0}), False)
 
+# figurante (multidao) esperando na fila e pulado bem antes de quem importa
+_nv3 = _narrador_tocando(1.4)
+confere("pessoa importante 1,4 s atrasada fica", 9 in _nv3.puladas, False)
+_nv4 = Narrador.__new__(Narrador)
+_nv4.cfg = {"pular_atrasada_s": 3.0, "pular_atual_apos": 3, "pular_figurante_s": 1.0}
+_nv4.tocando, _nv4.acabou_atual, _nv4.no_toque, _nv4.ult_fim_toque = 8, False, True, _t.time()
+_nv4.pular_ate, _nv4.puladas, _nv4.ideal_fim, _nv4.pags_figurante = 0, set(), {}, {9}
+_nv4.chegada = {8: _t.time() - 5.0, 9: _t.time() - 1.4, 10: _t.time()}
+_nv4.pag = 10
+_nv4._pular_meio()
+confere("figurante 1,4 s atrasado e pulado", 9 in _nv4.puladas, True)
+
+# camada de fundo: soma por baixo da voz principal, sem passar de 1
+import threading as _th   # noqa: E402
+import numpy as _np       # noqa: E402
+_nv5 = Narrador.__new__(Narrador)
+_nv5.trava_fundo = _th.Lock()
+_nv5.fundo = _np.full(30, 0.5, _np.float32)
+_saiu = []
+_nv5._escrever = lambda b, sr: _saiu.append(_np.array(b))
+_nv5._escrever_mix(_np.full(20, 0.8, _np.float32), 24000)
+confere("fundo somado e limitado a 1", (_saiu[0].max() <= 1.0, len(_nv5.fundo)), (True, 10))
+_nv5._escrever_mix(_np.zeros(20, _np.float32), 24000)
+confere("fundo toca no silencio e acaba", (round(float(_saiu[1][:10].mean()), 2), float(_saiu[1][10:].max()), len(_nv5.fundo)),
+        (0.5, 0.0, 0))
+
+# legendas empilhadas de pessoas diferentes (assalto do GTA 6, 18/11 00:15): uma fala por pessoa
+from nucleo.tela import eh_figurante, separar_falantes, tirar_idioma   # noqa: E402
+for t, esperado in [
+        ("Lucia: Você! Dinheiro no balcão, agora, porra! Pessoa local: Que bairro de merda, cara. Não dá pra fazer nada aqui.",
+         [("Lucia", "Você! Dinheiro no balcão, agora, porra!"),
+          ("Pessoa local", "Que bairro de merda, cara. Não dá pra fazer nada aqui.")]),
+        ("Você! Dinheiro no balcão, agora, porra! Pessoa loeal;. Que bairro de merda, cara.",
+         [("", "Você! Dinheiro no balcão, agora, porra!"), ("Pessoa local", "Que bairro de merda, cara.")]),
+        ("Pessoa local: Que bairro de merda. Atendente: Ah! Tá, tá, só fica calma.",
+         [("Pessoa local", "Que bairro de merda."), ("Atendente", "Ah! Tá, tá, só fica calma.")]),
+        ("Só quero a grana. Pessoa local: Espanhol ' Ai, Santa Bárbara, me protege.",
+         [("", "Só quero a grana."), ("Pessoa local", "Ai, Santa Bárbara, me protege.")]),
+        ("Eu falei com o Gerente: ele disse que não.", [("", "Eu falei com o Gerente: ele disse que não.")]),
+        ("Presta atenção: isso é sério.", [("", "Presta atenção: isso é sério.")]),
+        ("Swanson: A Abigail disse que ele tá morrendo, Dutch.",
+         [("Swanson", "A Abigail disse que ele tá morrendo, Dutch.")])]:
+    confere(f"empilhadas {t[:35]!r}", separar_falantes([L(t)]), esperado)
+confere("empilhadas em linhas", separar_falantes([L("Lucia: Rápido, porra!", y=0), L("Atendente: Pronto!", y=30)]),
+        [("Lucia", "Rápido, porra!"), ("Atendente", "Pronto!")])
+for n, esperado in [("Pessoa local", True), ("Pessoas locais", True), ("Turista 2", True), ("Lucia", False),
+                    ("Policial", False), ("Atendente", False)]:
+    confere(f"figurante {n!r}", eh_figurante(n), esperado)
+# "É" que o OCR leu sem acento: a voz lia "e" (teste do assalto, 20/11)
+for t, esperado in [("E um assalto!", "É um assalto!"), ("E claro.", "É claro."), ("E isso.", "É isso."),
+                    ("E isso que você fez?", "E isso que você fez?"), ("E mesmo assim ele foi.", "E mesmo assim ele foi."),
+                    ("E um dia ele voltou pra casa.", "E um dia ele voltou pra casa."), ("E você?", "E você?"),
+                    ("Isso. E sério?", "Isso. É sério?")]:
+    confere(f"acento no É {t!r}", preparar_fala(t), esperado)
+confere("etiqueta de idioma",tirar_idioma("(Espanhol) Ai, Santa Bárbara."), "Ai, Santa Bárbara.")
+confere("sem etiqueta", tirar_idioma("Espanta os pombos."), "Espanta os pombos.")
+
 print(f"{'TUDO CERTO' if not falhas else 'FALHAS'}: {len(falhas)} problema(s)")
 for f in falhas:
     print("  ✗", f)
