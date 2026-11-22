@@ -121,6 +121,128 @@ def aparar(wav, sr, lim=0.012, antes=0.02, depois=0.05):
     return wav[max(0, idx[0] - int(sr * antes)):min(len(wav), idx[-1] + int(sr * depois))]
 
 
+# fala que comeca com interjeicao: o XTTS segura a vogal 0,45-0,7 s ("Aaaaah...", 22/11; testado com
+# "Ah", "Ah!", "Ah?", "Á!", "Hm", "Hum", "Hmm": todas esticam igual, nao adianta mudar o texto)
+_RE_INTERJEICAO = re.compile(r"^\W*(?:a+h+|o+h+|u+h+|h+m+|hu+m+|e+h+|hã+|ah+n)(?![\wÀ-ÿ])", re.I)
+
+
+def comeca_com_interjeicao(texto):
+    return bool(_RE_INTERJEICAO.match(texto or ""))
+
+
+def so_interjeicao(texto):
+    """ "Ah...", "Oh.", "Hm" (nada mais na fala)."""
+    return comeca_com_interjeicao(texto) and not re.search(r"[^\W\d_]", _RE_INTERJEICAO.sub("", texto, count=1))
+
+
+def encurtar_interjeicao(w, sr, alvo=0.3, folga=0.08, sozinha=False):
+    """Encurta a 1a vogal do audio se ela passar de alvo+folga segundos: tira um trecho do MEIO
+    (onde o som esta parado) com tamanho multiplo do periodo da voz e emenda com cross-fade curto,
+    sem estalo e sem mudar o tom. -> audio (igual ao recebido se nao precisar)."""
+    w = np.asarray(w, dtype=np.float32)
+    q = int(sr * 0.01)
+    if len(w) < q * 10:
+        return w
+    nq = len(w) // q
+    blocos = w[:nq * q].reshape(nq, q)
+    env = np.sqrt(np.mean(blocos ** 2, axis=1))
+    zcr = np.mean(np.abs(np.diff(np.sign(blocos), axis=1)) > 0, axis=1)
+    lim = max(0.01, 0.15 * float(env.max()))
+    sonoro = (env > lim) & (zcr < 0.25)          # vogal/"m" (o chiado do "s" nao conta)
+    ini = next((i for i in range(min(nq, 15)) if sonoro[i]), None)
+    if ini is None:
+        return w
+    fim, buraco = ini, 0
+    for i in range(ini, nq):
+        if sonoro[i]:
+            fim, buraco = i, 0
+        else:
+            buraco += 1
+            if buraco >= 2:
+                break
+    # o "Ah" emendado na palavra seguinte sem silencio ("Ah-merda", 22/11: espremia as duas em 0,3 s
+    # e a palavra sumia): a vogal acaba onde o timbre muda (>= 7 dB de diferenca media em 16 faixas)
+    # (fala SO com a interjeicao: todo o som e a vogal, nao precisa procurar onde ela acaba;
+    # idem se depois dela vem uma PAUSA de verdade, >= 0,1 s: "Hm... Sim.", "Ah! Lucia!". O
+    # fechamento de um "d"/"t" no meio da palavra ("Ah-merd-a") dura so 30-60 ms)
+    pausa = 0
+    for i in range(fim + 1, nq):
+        if env[i] > lim:
+            break
+        pausa += 1
+    sozinha = sozinha or (pausa >= 10 and fim + 1 + pausa < nq)
+    n2 = 2 * q
+    if not sozinha and fim - ini > 8 and (fim + 1) * q + q <= len(w):
+        fq = np.fft.rfftfreq(n2, 1 / sr)
+        bordas = np.geomspace(100, 5000, 17)
+        faixa = np.digitize(fq, bordas) - 1
+        jan = np.hanning(n2)
+        perfis = []
+        for i in range(ini, fim + 1):
+            P = np.abs(np.fft.rfft(w[i * q:i * q + n2] * jan)) ** 2 if i * q + n2 <= len(w) else None
+            if P is None:
+                break
+            b = np.bincount(faixa[(faixa >= 0) & (faixa < 16)], P[(faixa >= 0) & (faixa < 16)], 16) + 1e-10
+            lb = 10 * np.log10(b)
+            perfis.append(lb - lb.mean())
+        if len(perfis) > 8:
+            ref = np.mean(perfis[2:7], axis=0)
+            seguidos = 0
+            for k, pf in enumerate(perfis):
+                seguidos = seguidos + 1 if np.abs(pf - ref).mean() >= 5 else 0
+                if seguidos >= 2:
+                    fim = ini + k - 2
+                    break
+    dur = (fim - ini + 1) * 0.01
+    if dur <= alvo + folga:
+        return w
+    alvo = max(alvo, dur / (2.5 if sozinha else 2))   # nunca espreme demais
+    # o tom costuma cair durante o "aaah" (um corte so no meio nao emenda): comprime a vogal
+    # inteira com WSOLA (varias emendas pequenas, cada uma no ponto em que a onda continua igual)
+    borda = int(sr * 0.03)
+    a, b = ini * q + borda, (fim + 1) * q - borda
+    if b - a < int(sr * 0.1):
+        return w
+    vogal = _wsola(w[a:b], (b - a) / max(1, (b - a) - int((dur - alvo) * sr)), sr)
+    f = int(sr * 0.008)
+    rampa = np.linspace(0, 1, f, dtype=np.float32)
+    fim_v = vogal[-f:] * (1 - rampa) + w[b:b + f] * rampa       # volta ao som original sem estalo
+    return np.concatenate([w[:a], vogal[:-f], fim_v, w[b + f:]]).astype(np.float32)
+
+
+def _wsola(x, taxa, sr):
+    """Comprime x (taxa > 1 = mais curto) sem mudar o tom."""
+    n = int(sr * 0.02)                 # janela de 20 ms
+    hs = n // 2                        # passo na saida
+    ha = hs * taxa                     # passo na entrada
+    tol = int(sr * 0.005)
+    jan = np.hanning(n + 2)[1:-1].astype(np.float32)      # sem zero nas pontas (zerava a 1a amostra: estalo)
+    total = int(len(x) / taxa) + n
+    y = np.zeros(total, dtype=np.float32)
+    peso = np.zeros(total, dtype=np.float32)
+    pos_in, pos_out, prox = 0, 0, None
+    while pos_out + n <= total:
+        alvo_in = int(round(pos_out / hs * ha)) if prox is not None else 0
+        if alvo_in + n + tol >= len(x):
+            break
+        if prox is None:
+            pos_in = 0
+        else:
+            # o trecho (perto de alvo_in) mais parecido com a continuacao natural do anterior
+            lo, hi = max(0, alvo_in - tol), min(len(x) - n, alvo_in + tol)
+            cand = np.lib.stride_tricks.sliding_window_view(x[lo:hi + n], n)
+            k = int(np.argmax(cand @ prox))
+            pos_in = lo + k
+        y[pos_out:pos_out + n] += x[pos_in:pos_in + n] * jan
+        peso[pos_out:pos_out + n] += jan
+        prox = x[pos_in + hs:pos_in + hs + n] if pos_in + hs + n <= len(x) else x[pos_in:pos_in + n]
+        pos_out += hs
+    fim = pos_out + hs
+    peso[peso < 1e-9] = 1.0
+    return (y / peso)[:max(hs, fim - hs)]
+
+
+
 def pausa_apos(frase):
     s = frase.rstrip()
     if s.endswith("..."):
@@ -897,6 +1019,10 @@ class MotorClonada:
                 try:
                     feito, cortou = 0, False
                     tira = TiraSilencio(24000)
+                    # "Ah..."/"Hm" no comeco: segura o comeco (~1 s de audio, gerado bem mais rapido
+                    # que isso) para encurtar a vogal esticada antes de tocar
+                    segurar = comeca_com_interjeicao(frase)
+                    guardado = []
                     with self.trava, torch.inference_mode():
                         partes = self._stream(frase, lang, gpt, spk, velocidade)
                         primeiro = True
@@ -911,10 +1037,19 @@ class MotorClonada:
                                     w = w * np.linspace(1, 0, len(w), dtype=np.float32) ** 2
                                 cortou = True
                             feito += len(w)
+                            if segurar:
+                                guardado.append(w)
+                                if feito < int(24000 * 1.1) and not cortou:
+                                    continue
+                                w, segurar = encurtar_interjeicao(np.concatenate(guardado), 24000,
+                                                                  sozinha=so_interjeicao(frase)), False
                             yield ream(tira(w)), 24000, 0.0
                             if cortou:
                                 partes.close()
                                 break
+                    if segurar and guardado:            # a fala inteira coube no que foi segurado
+                        yield ream(tira(encurtar_interjeicao(np.concatenate(guardado), 24000,
+                                                             sozinha=so_interjeicao(frase)))), 24000, 0.0
                     if cortou:
                         log(f"✂ Voz {vid}: cortei um trecho estranho no fim de “{frase[:40]}”", tipo="aviso")
                         diag.ev("corte", voz=vid, frase=frase, limite_s=round(limite / 24000, 2))
@@ -933,7 +1068,10 @@ class MotorClonada:
                 if len(w) <= limite:
                     break
             tira = TiraSilencio(24000)
-            w = tira(aparar(w[:limite].astype(np.float32), 24000))
+            w = aparar(w[:limite].astype(np.float32), 24000)
+            if comeca_com_interjeicao(frase):
+                w = encurtar_interjeicao(w, 24000, sozinha=so_interjeicao(frase))
+            w = tira(w)
             yield ream(np.concatenate([w, tira.fim()])), 24000, pausa
 
 

@@ -383,9 +383,25 @@ for f, esperado in [("ia: Só água.", "Só água."), ("lá: Vai na minha, ok?",
                     ("s Não, não, tá de boa.", "Não, não, tá de boa."), ("a gente vai", "a gente vai"),
                     ("e Você?", "e Você?")]:
     confere(f"comeco sujo {f!r}", _g._nome_na_fala(f)[1], esperado)
+# nome conhecido colado na fala sem ":" (GTA 6 22/11: saia na voz do narrador)
+for f, esperado in [("Jason Você dormiu bem?", ("Jason", "Você dormiu bem?")),
+                    ("Lucia Pessoas que não são presas,", ("Lucia", "Pessoas que não são presas,")),
+                    ("Pessoa local Que porra que deu em você?", ("Pessoa local", "Que porra que deu em você?")),
+                    ("Jason Duval.", ("", "Jason Duval.")),
+                    ("Talvez depois que eu buscar a Lucia", ("", "Talvez depois que eu buscar a Lucia"))]:
+    confere(f"nome sem dois-pontos {f!r}", _g._nome_na_fala(f), esperado)
 
 # cargo "-ista" nao e masculino nem feminino
 confere("motorista sem sexo", [v for d, v, *_ in pistas_nome("Motorista") if d == "s"], [])
+confere("Mattia e homem", next((v for d, v, *_ in pistas_nome("Mattia") if d == "s"), None), "m")
+confere("banda sem sexo", [v for d, v, *_ in pistas_nome("Banda") if d == "s"], [])
+# objetivo grudado no fim da legenda nao ganha o nome de quem falava (22/11 17:30)
+import time as _t   # noqa: E402
+_g._nomes_hist = [("Lori", _t.time() - 1, "Ei, vamos sentar, amor. Passe um tempo com seus amigos..."),
+                  ("", _t.time() - 0.5, "Passe um tempo com seus amigos.")]
+confere("objetivo sozinho", _g._objetivo_sozinho("Passe um tempo com seus amigos.", _t.time()), True)
+_g._nomes_hist = [("Lucia", _t.time() - 1, "Espere aí, Jason."), ("", _t.time() - 0.5, "Espere aí, Jason.")]
+confere("fala com verbo nao e objetivo", _g._objetivo_sozinho("Espere aí, Jason.", _t.time()), False)
 
 # 2a frase da MESMA legenda nao acelera so por ter esperado a 1a tocar (18/11: 204 de 311 aceleradas)
 from nucleo.vozes import Narrador   # noqa: E402
@@ -567,6 +583,25 @@ for t, esperado in [("E um assalto!", "É um assalto!"), ("E claro.", "É claro.
     confere(f"acento no É {t!r}", preparar_fala(t), esperado)
 confere("etiqueta de idioma",tirar_idioma("(Espanhol) Ai, Santa Bárbara."), "Ai, Santa Bárbara.")
 confere("sem etiqueta", tirar_idioma("Espanta os pombos."), "Espanta os pombos.")
+
+# "Ah..." esticado pelo XTTS (22/11): encurta a 1a vogal sem estalo e sem mexer no resto
+from nucleo.vozes import comeca_com_interjeicao, encurtar_interjeicao   # noqa: E402
+for t, esp in [("Ah...", True), ("Ah, merda.", True), ("Hum, legal.", True), ("Hm... Sim.", True), ("Oh.", True),
+               ("Agora não.", False), ("É isso.", False), ("Oi!", False), ("Ahmed chegou.", False), ("Uhum.", False)]:
+    confere(f"interjeicao {t!r}", comeca_com_interjeicao(t), esp)
+_sr = 24000
+_tt = _np.arange(int(_sr * 0.6)) / _sr
+_f0 = 180 - 60 * _tt                                  # tom caindo, como no "aaah" do XTTS
+_vog = (0.5 * _np.sin(2 * _np.pi * _np.cumsum(_f0) / _sr)).astype(_np.float32)
+_aud = _np.concatenate([_np.zeros(1200, _np.float32), _vog, _np.zeros(6000, _np.float32)])
+_cur = encurtar_interjeicao(_aud, _sr, sozinha=True)
+from nucleo.vozes import so_interjeicao   # noqa: E402
+for t, esp in [("Ah...", True), ("Oh.", True), ("Hm", True), ("Ah, merda.", False), ("Hm... Sim.", False)]:
+    confere(f"so interjeicao {t!r}", so_interjeicao(t), esp)
+confere("vogal de 0,6 s encurtada", round((len(_aud) - len(_cur)) / _sr, 1), 0.3)
+confere("sem estalo na emenda", float(_np.abs(_np.diff(_cur)).max()) <= float(_np.abs(_np.diff(_aud)).max()) * 1.2, True)
+_curta = _np.concatenate([_np.zeros(1200, _np.float32), _vog[:int(_sr * 0.3)], _np.zeros(6000, _np.float32)])
+confere("vogal normal fica igual", len(encurtar_interjeicao(_curta, _sr, sozinha=True)), len(_curta))
 
 print(f"{'TUDO CERTO' if not falhas else 'FALHAS'}: {len(falhas)} problema(s)")
 for f in falhas:

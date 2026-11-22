@@ -56,6 +56,9 @@ _pal("homem senhor seu sr rei pai papai tio irmão moço cavalheiro man king fat
 _pal("srta sra senhorita miss mrs ms dra madame lady", ("s", "f", 3), ("i", "adulto", 1.0))
 _pal("sr mr dr monsieur sir", ("s", "m", 3), ("i", "adulto", 1.0))
 
+_MASC_EM_A = set("""mattia luca nicola elia joshua ezra jonah misha
+ batista akira kenta yuta""".split())
+
 _FEM_SUFIXO = re.compile(r"(ora|eira|ária|aria|esa|isa|triz|ã|ina|ona)$")
 _MAS_SUFIXO = re.compile(r"(or|eiro|ário|ario|ês|ão|ino|ão|ista)$")
 _NEUTRAS = {"testemunha", "pessoa", "crianca", "vitima", "guarda", "sentinela", "recruta", "pirata",
@@ -216,7 +219,12 @@ def pistas_nome(nome):
     else:
         ult = sem_acento(palavras[-1] if len(palavras) == 1 else p0)
         # ("y" nao entra: Tony, Billy, Jimmy, Davey, Trelawny sao homens)
-        if ult.endswith(("a", "ine", "elle", "ette")):
+        # homens com nome terminado em "a" (Mattia do GTA 6 comecou com voz de mulher, 22/11)
+        if ult in _MASC_EM_A:
+            saida.append(("s", "m", 1.4, f"“{p0.title()}” é nome masculino"))
+        elif ult in ("banda", "plateia", "multidao", "galera", "turma", "gente", "equipe", "torcida"):
+            pass                                   # grupo de pessoas: nem homem nem mulher
+        elif ult.endswith(("a", "ine", "elle", "ette")):
             saida.append(("s", "f", 0.7, "nome com cara de feminino"))
         elif ult.endswith(("o", "us", "os", "or", "er", "k", "d", "n", "r")):
             saida.append(("s", "m", 0.5, "nome com cara de masculino"))

@@ -176,7 +176,8 @@ class Nucleo:
             "motor": self.estado_motor(),
             "config": {k: cfg.get(k) for k in ("volume", "velocidade", "motor", "visao", "escuta", "auto_regiao",
                                                 "jogo_fixo", "interromper_ao_avancar", "acelerar_se_atrasado",
-                                                "fonte", "fonte_hwnd", "fonte_monitor", "voz_unica")},
+                                                "fonte", "fonte_hwnd", "fonte_monitor", "voz_unica",
+                                                "abafar_jogo", "abafar_nivel")},
             "banco": self.banco.resumo(),
             "personagens": self.personagens(),
             "falando": self.ultimo_falando,
@@ -955,6 +956,20 @@ class Nucleo:
         ruins += sum(1 for w in pal if w[:1].isupper() and not Leitor._conhecida(w) and w != pal[0] and len(w) <= 4)
         return ruins >= 0.5 * len(pal)
 
+    def _objetivo_sozinho(self, fala, agora):
+        """Frase com verbo de objetivo ("Faça sua jogada.") que foi lida SOZINHA e sem nome nos
+        ultimos 3 s: e o objetivo da missao, nao fala de quem estava na legenda."""
+        from .tela import _VERBOS_OBJETIVO
+        p = re.sub(r"[^\wÀ-ÿ-]", "", (fala.split() or [""])[0]).lower()
+        if (p not in _VERBOS_OBJETIVO and p.split("-")[0] not in _VERBOS_OBJETIVO) or fala.rstrip().endswith(("?", "!")):
+            return False
+        a = normalizar(fala)
+        hist = [(n, normalizar(tx)) for n, tt, tx in getattr(self, "_nomes_hist", ()) if agora - tt <= 3.0]
+        sozinho = any(not n and semelhanca(tx, a) >= 0.8 for n, tx in hist)
+        # lida COM nome comecando por ela ("Lucia: Espere aí.") -> e fala de verdade (o nome so piscou)
+        com_dono = any(n and tx.startswith(a[:14]) for n, tx in hist)
+        return sozinho and not com_dono
+
     def _eh_objetivo(self, fala):
         """Video em que quase toda fala vem com "Nome:" (filme do RDR2): uma legenda SEM nome que
         comeca com verbo de objetivo ("Ajude o Charles e o Bill", "Fuja pelo buraco...", "Entre em
@@ -1181,6 +1196,17 @@ class Nucleo:
             if nome:
                 diag.ev("nome_na_fala", lido=m.group(1), nome=nome)
                 return nome, m.group(2)
+        # "Jason Você dormiu bem?", "Lucia Pessoas que não...", "Pessoa local Que porra...": o OCR
+        # comeu o ":" de um personagem JA CONHECIDO e a fala segue com uma palavra comum em
+        # Maiuscula (GTA 6 22/11: falava o nome e saia na voz do narrador). "Jason Duval." nao
+        # separa: "Duval" nao e palavra comum do portugues.
+        m = re.match(r"^\W{0,2}([A-ZÀ-Ý][a-zà-ÿ]{2,15}(?:\s[a-zà-ÿ]{3,12}|\s\d{1,2})?)\.?\s+([A-ZÀ-Ý][a-zà-ÿ]*)(.*)$", fala)
+        if m and self.dic.ok:
+            nome = self._nome_canonico(m.group(1))
+            if (nome in conhecidos and normalizar(nome) == normalizar(m.group(1))
+                    and self.dic.freq.get(m.group(2).lower(), 0) >= 50000):    # palavra comum, nao sobrenome
+                diag.ev("nome_na_fala", lido=m.group(1), nome=nome)
+                return nome, (m.group(2) + m.group(3)).strip()
         m = re.match(r"^([A-ZÀ-Ý][a-zà-ÿ]{2,15})\s+([a-zà-ÿ].*)$", fala)
         if m and m.group(1) in conhecidos:
             agora = time.time()
@@ -1659,6 +1685,8 @@ class Nucleo:
                                                    and not self._jogo_na_frente()) else "lendo")
         if texto:
             self.sem_texto = 0
+            self._nomes_hist = getattr(self, "_nomes_hist", collections.deque(maxlen=60))
+            self._nomes_hist.append((self._nome_canonico(nome) if nome else "", agora, texto))
             self.ult_nomes.append(self._nome_canonico(nome))
             self.ult_nomes_t.append(agora)
             self.ult_nomes_txt.append(texto)
@@ -1715,6 +1743,19 @@ class Nucleo:
                     txts = getattr(self, "ult_nomes_txt", None) or [None] * len(self.ult_nomes)
                     self.nome_pagina = nome_estavel([n for n, tt, tx in zip(self.ult_nomes, self.ult_nomes_t, txts)
                                                      if tt >= desde and self._mesmo_texto(fala, tx)])
+                    if not self.nome_pagina and not nome_f:
+                        # a leitura que virou fala perdeu o nome, mas ESTE texto foi lido com nome
+                        # pouco antes ("Jason: eu sou..." lido 4x como Jason e falado pelo narrador;
+                        # "Lucia: Mas ainda tá com isso.", GTA 6 22/11)
+                        # ...so leitura que COMECA com esta fala: o objetivo grudado no fim de uma
+                        # legenda ("Lori: Ei, vamos sentar. Passe um tempo com seus amigos.") ganhava
+                        # o nome dela (22/11 17:30)
+                        a14 = normalizar(fala)[:14]
+                        hist = [n for n, tt, tx in getattr(self, "_nomes_hist", ())
+                                if n and agora - tt <= 3.0 and a14 and normalizar(tx).startswith(a14)]
+                        if hist and not self._objetivo_sozinho(fala, agora):
+                            self.nome_pagina = nome_estavel(hist)
+                            diag.ev("nome_recuperado", quem=self.nome_pagina, texto=fala[:40])
                 else:
                     self.nome_pagina = nome_estavel(self.ult_nomes)
                 self.ficha_pagina = None
@@ -1736,6 +1777,11 @@ class Nucleo:
                     diag.ev("continua", quem=ant[0], texto=fala[:50])
             if nome_f:
                 self.nome_pagina = nome_f          # o nome que estava grudado na propria fala vale mais
+            elif self.nome_pagina and self._modo_legenda() and self._objetivo_sozinho(fala, agora):
+                # "Jason: Claro, Don. Espere a sua vez.": o objetivo grudado na legenda saia na voz
+                # do Jason; ele tambem aparece sozinho e sem nome na tela -> e do narrador (22/11)
+                diag.ev("objetivo_sem_dono", era=self.nome_pagina, texto=fala[:40])
+                self.nome_pagina = ""
             if self.nome_pagina and len(fala.split()) >= 3:
                 # nome de quem fala colado no comeco, estragado pelo OCR ("Trelawnv ligados a Cole...",
                 # quem fala e o Trelawny, 15/11): tira a 1a palavra se parece o nome e o resto segue

@@ -473,7 +473,8 @@ function ajustes(){
     ch("interromper_ao_avancar","Cortar ao avançar","Ligado: a fala anterior para na hora. Desligado: ela acelera para alcançar a nova") +
     ch("acelerar_se_atrasado","Alcançar o texto","Fala um pouco mais rápido se ficou para trás");
 }
-$("#ajustes").addEventListener("click", e => { const b=e.target.closest(".chave"); if(!b) return; const k=b.dataset.k; E.config[k]=!E.config[k]; b.classList.toggle("on"); api("config",{[k]:E.config[k]}); });
+// o valor novo sai do que o botao MOSTRA (nao de E.config, que pode faltar a chave e virar sempre "ligar")
+$("#ajustes").addEventListener("click", e => { const b=e.target.closest(".chave"); if(!b) return; const k=b.dataset.k; const v=!b.classList.contains("on"); E.config[k]=v; b.classList.toggle("on",v); api("config",{[k]:v}); });
 $("#ajustes").addEventListener("input", e => { if(e.target.dataset.k) $("#v_"+e.target.dataset.k).textContent=(+e.target.value).toFixed(2); });
 $("#ajustes").addEventListener("change", e => { const k=e.target.dataset.k; if(k){ E.config[k]=+e.target.value; api("config",{[k]:+e.target.value}); } });
 

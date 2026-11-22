@@ -1201,7 +1201,8 @@ _VERBOS_OBJETIVO = set("""derrote siga va vá pegue mate encontre volte proteja 
  converse cumprimente dance brinde explore visite compre venda entregue retorne vá descubra observe
  coloque ponha vista tire selecione abra feche acenda apague retire recupere dirija atravesse cruze chegue
  alimente escove acalme laceie lace sele domine guarde jogue carregue empurre arrombe
- capture resgate salve cace esfole pesque amanse leve-o leve-a solte dome desmonte""".split())
+ capture resgate salve cace esfole pesque amanse leve-o leve-a solte dome desmonte
+ passe faça faca aguarde ganhe aposte vença venca assista termine participe""".split())
 
 
 def _cara_de_nome(t):
