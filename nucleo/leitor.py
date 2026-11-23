@@ -321,6 +321,10 @@ class Leitor:
                 elif op == "replace" and o_ok and not all(cls._conhecida(w) for w in trecho_b) \
                         and abs((j2 - j1) - (i2 - i1)) <= 2:
                     novo += trecho_o
+                elif op == "replace" and o_ok and cls._palavra_partida(trecho_b, trecho_o):
+                    # o OCR partiu uma palavra em duas que tambem existem ("manda" -> "man dá", 22/11):
+                    # a outra leitura tem ela inteira
+                    novo += trecho_o
                 elif op == "equal" and trecho_o:
                     # mesma palavra: fica com a pontuacao/acento da que for palavra de verdade
                     novo += [wo if cls._conhecida(wo) and not cls._conhecida(wb) else wb
@@ -329,6 +333,17 @@ class Leitor:
                     novo += trecho_b
             base = novo
         return " ".join(base)
+
+    @staticmethod
+    def _palavra_partida(partes, inteira):
+        """["man", "dá"] x ["manda"]: mesmas letras, menos palavras, e a inteira e mais comum que
+        o pedaco mais raro (as duas existem: "de mais" x "demais" fica como estava)."""
+        from .tela import _FREQ
+        if len(inteira) >= len(partes) or "".join(normalizar(w) for w in partes) != "".join(normalizar(w) for w in inteira):
+            return False
+        def freq(w):
+            return _FREQ.get(re.sub(r"[^\w]", "", w.lower()), 0)
+        return min(freq(w) for w in inteira) > min(freq(w) for w in partes)
 
     @classmethod
     def _tem_estranha(cls, texto):

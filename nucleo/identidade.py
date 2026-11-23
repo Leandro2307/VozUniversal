@@ -449,6 +449,17 @@ VARIACOES = [(1.0, 1.0), (1.03, 0.97), (0.97, 1.03), (1.05, 1.0), (0.95, 0.98), 
 PRIOR = {"s": {"m": 0.3, "f": 0.0}, "i": {"crianca": 0.0, "adulto": 0.6, "idoso": 0.0}}
 
 
+def eh_plural(nome):
+    """ "Turistas", "Policiais", "Pessoas locais", "Banda": varias pessoas. Nome proprio terminado
+    em s ("Marcus", "Douglas") nao e grupo."""
+    from .util import normalizar
+    p = normalizar((nome or "").split()[0] if (nome or "").split() else "")
+    if p in ("banda", "plateia", "multidao", "galera", "turma", "gente", "equipe", "torcida", "gangue",
+             "tripulacao", "patrulha", "todos", "todas", "grupo", "coro"):
+        return True
+    return len(p) >= 5 and p.endswith("s") and p not in nomes_proprios()
+
+
 class Elenco:
     """Fichas dos personagens de um jogo (vivem no perfil do jogo)."""
 
@@ -550,7 +561,10 @@ class Elenco:
             pistas = []
             if novo:
                 pistas += pistas_nome(nome)
-            pistas += pistas_texto(texto)
+            if not eh_plural(nome):
+                # grupo ("Turistas", "Policiais"): cada fala e de uma pessoa diferente; "Eu sou velha!"
+                # de uma turista deixava todos os turistas com voz de idosa (22/11)
+                pistas += pistas_texto(texto)
             if visao:
                 pistas += pistas_visao(visao)
                 f["olhadas"] = f.get("olhadas", 0) + 1

@@ -603,6 +603,33 @@ confere("sem estalo na emenda", float(_np.abs(_np.diff(_cur)).max()) <= float(_n
 _curta = _np.concatenate([_np.zeros(1200, _np.float32), _vog[:int(_sr * 0.3)], _np.zeros(6000, _np.float32)])
 confere("vogal normal fica igual", len(encurtar_interjeicao(_curta, _sr, sozinha=True)), len(_curta))
 
+# GTA 6 22/11 (noite): nome com lixo, palavra partida, nome picotado antes do ":" e lixo curto
+import time as _time   # noqa: E402
+
+
+class _PerfilGta:
+    personagens = {"Jason": {}, "Lucia": {}, "Pessoa local": {}, "Policiais": {}, "Policial": {}}
+
+
+_q = Nucleo.__new__(Nucleo)
+_q.perfil, _q.dic, _q.ult_nomes, _q.ult_nomes_t = _PerfilGta(), dic, [], []
+_q._falou_t = {"lucia": _time.time()}
+for lido, certo in [("VIL'frcia", "Lucia"), ("Úucia", "Lucia"), ("Marcia", "Marcia")]:
+    confere(f"nome com lixo {lido}", _q._nome_canonico(lido), certo)
+_q._falou_t = {}
+confere("so corrige quem falou ha pouco", _q._nome_canonico("VIL'frcia") != "Lucia", True)
+confere("nome picotado antes do :", _q._nome_na_fala("Pés s a l cal: Mas que merda?"), ("Pessoa local", "Mas que merda?"))
+confere("frase com : nao e nome", _q._nome_na_fala("Eu disse: vai embora agora."), ("", "Eu disse: vai embora agora."))
+for t, esp in [("Bté F.", True), ("too se oe).", True), ("Ná-ã!", False), ("Vai se lascar!", False),
+               ("Até mais, Dezão.", False), ("Liberalóide.", False), ("Urgh, brega.", False), ("Ué, ui.", False)]:
+    confere(f"lixo curto {t!r}", _q._lixo_curto(t), esp)
+confere("palavra partida pelo OCR", Leitor._juntar(["Só... man dá uma mensagem quand e chegar.", "Só... manda uma mensagem quando chegar."]),
+        "Só... manda uma mensagem quando chegar.")
+confere("de mais x demais fica", Leitor._juntar(["Eu falei de mais hoje.", "Eu falei demais hoje."]), "Eu falei de mais hoje.")
+from nucleo.identidade import eh_plural   # noqa: E402
+for n_, esp in [("Turistas", True), ("Policiais", True), ("Banda", True), ("Marcus", False), ("Lucia", False), ("Pessoa local", False)]:
+    confere(f"grupo {n_}", eh_plural(n_), esp)
+
 print(f"{'TUDO CERTO' if not falhas else 'FALHAS'}: {len(falhas)} problema(s)")
 for f in falhas:
     print("  ✗", f)

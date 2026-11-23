@@ -389,6 +389,16 @@ class Nucleo:
         if len(parecidos) == 1 and self._pode_ser_o_mesmo(b, conhecidos[parecidos[0]]):
             diag.ev("nome_corrigido", lido=b, virou=conhecidos[parecidos[0]])
             return conhecidos[parecidos[0]]
+        # 1a letra errada ou lixo grudado na frente ("Úucia", "VIL'frcia" = Lucia; 22/11 virou
+        # personagem nova com outra voz): termina com o desenho de quem falou ha pouco
+        recentes = [k for k in conhecidos
+                    if len(k) >= 4 and time.time() - getattr(self, "_falou_t", {}).get(k, 0) <= 120]
+        lixo = bool(re.search(r"['\d]|[a-zà-ÿ][A-ZÀ-Ý]", b))
+        rabo = [k for k in recentes if forma(n).endswith(forma(k)[1:])
+                and (len(n) == len(k) or (lixo and len(k) < len(n) <= len(k) + 4))]
+        if len(rabo) == 1 and self._pode_ser_o_mesmo(b if not lixo else conhecidos[rabo[0]], conhecidos[rabo[0]]):
+            diag.ev("nome_corrigido", lido=b, virou=conhecidos[rabo[0]])
+            return conhecidos[rabo[0]]
         if len(n) >= 4:
             from .identidade import nomes_proprios
             lista = [x for x in nomes_proprios() if len(x) >= 3]
@@ -956,6 +966,27 @@ class Nucleo:
         ruins += sum(1 for w in pal if w[:1].isupper() and not Leitor._conhecida(w) and w != pal[0] and len(w) <= 4)
         return ruins >= 0.5 * len(pal)
 
+    def _lixo_curto(self, fala):
+        """Fala curta (2-3 palavras, ate 12 letras) que e so sujeira do OCR: "Bté F.", "too se oe)."
+        (22/11: faladas pelo narrador e pelo policial). Precisa de 60% das letras em palavras que
+        existem e nenhum parentese/barra solto. Uma palavra sozinha ("Liberalóide.") nunca cai aqui."""
+        if not self.dic.ok:
+            return False
+        toks = re.findall(r"[^\W\d_]+", fala)
+        letras = sum(len(w) for w in toks)
+        if not 2 <= len(toks) <= 3 or letras > 12:
+            return False
+        if re.search(r"[()\[\]{}|<>]", fala) and fala.count("(") != fala.count(")"):
+            return True
+        # ruim: palavra que nao existe (nome com Maiuscula no meio, "Dezão", vale) ou consoante solta.
+        # Precisa de uma ruim com 3+ letras: "Ná-ã!" e "T á?" (interjeicao/OCR curto) ficam
+        def ruim(i, w):
+            if len(w) == 1:
+                return w.lower() not in "aeoéàáêôóíu"
+            return not self.dic.freq.get(w.lower()) and not (i > 0 and w[:1].isupper())
+        ruins = [w for i, w in enumerate(toks) if ruim(i, w)]
+        return any(len(w) >= 3 for w in ruins) and sum(len(w) for w in ruins) >= 0.5 * letras
+
     def _objetivo_sozinho(self, fala, agora):
         """Frase com verbo de objetivo ("Faça sua jogada.") que foi lida SOZINHA e sem nome nos
         ultimos 3 s: e o objetivo da missao, nao fala de quem estava na legenda."""
@@ -1196,6 +1227,15 @@ class Nucleo:
             if nome:
                 diag.ev("nome_na_fala", lido=m.group(1), nome=nome)
                 return nome, m.group(2)
+        # nome conhecido picotado em pedacos pelo OCR antes do ":" ("Pés s a l cal: Mas que merda?"
+        # = Pessoa local, 22/11: o narrador falou o nome junto)
+        m = re.match(r"^\W{0,2}((?:[^\s:;]{1,12}\s){1,5}[^\s:;]{1,12})\s*:\s+(\S.*)$", fala)
+        if m and 6 <= len(normalizar(m.group(1))) <= 22:
+            p = normalizar(m.group(1))
+            notas = sorted(((semelhanca(p, normalizar(k)), k) for k in conhecidos), reverse=True)
+            if notas and notas[0][0] >= 0.8 and (len(notas) == 1 or notas[0][0] - notas[1][0] >= 0.1):
+                diag.ev("nome_na_fala", lido=m.group(1), nome=notas[0][1])
+                return notas[0][1], m.group(2)
         # "Jason Você dormiu bem?", "Lucia Pessoas que não...", "Pessoa local Que porra...": o OCR
         # comeu o ":" de um personagem JA CONHECIDO e a fala segue com uma palavra comum em
         # Maiuscula (GTA 6 22/11: falava o nome e saia na voz do narrador). "Jason Duval." nao
@@ -1686,7 +1726,11 @@ class Nucleo:
         if texto:
             self.sem_texto = 0
             self._nomes_hist = getattr(self, "_nomes_hist", collections.deque(maxlen=60))
-            self._nomes_hist.append((self._nome_canonico(nome) if nome else "", agora, texto))
+            _nc = self._nome_canonico(nome) if nome else ""
+            self._nomes_hist.append((_nc, agora, texto))
+            if _nc:
+                self._falou_t = getattr(self, "_falou_t", {})
+                self._falou_t[normalizar(_nc)] = time.time()
             self.ult_nomes.append(self._nome_canonico(nome))
             self.ult_nomes_t.append(agora)
             self.ult_nomes_txt.append(texto)
@@ -1719,6 +1763,9 @@ class Nucleo:
                 continue
             if eh_relogio(fala):                             # tempo do player do video
                 diag.ev("descartei", motivo="relogio", texto=fala)
+                continue
+            if self._lixo_curto(fala):
+                diag.ev("descartei", motivo="curta e embaralhada", texto=fala)
                 continue
             nome_f, fala = self._nome_na_fala(fala)
             fala = self._nomes_no_texto(fala)
