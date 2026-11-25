@@ -133,6 +133,11 @@ NAO_TERMINA = set("""a o as os um uma uns umas de do da dos das na nas em ao aos
  neste nesta naquele naquela desse dessa deste desta num numa the of to and an""".split())
 
 
+# fala de rua com 1-3 letras que a lista de frequencias tem pouco ("tô" 18 mil): sem elas "Tô com os
+# Kingfishers" (lido certo 4x) virava "TIO os Kingfishers" (GTA 6, 23/11)
+CURTAS_OK = set("tô cê pô ué ui hm hmm ó ô cês vô mó uau eba oba hã aham uhum urgh argh nah véi bô".split())
+
+
 class Leitor:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -209,7 +214,7 @@ class Leitor:
     def _conhecida(w):
         from .tela import _FREQ
         w = re.sub(r"[^\w]", "", w.lower())
-        if not w or w.isdigit():
+        if not w or w.isdigit() or w in CURTAS_OK:
             return True
         f = _FREQ.get(w, 0)
         return f >= (20000 if len(w) <= 2 else 300 if len(w) == 3 else 1)
@@ -363,7 +368,7 @@ class Leitor:
         nota = 0.0
         for w in re.findall(r"[^\W\d_]+", texto.lower()):
             f = _FREQ.get(w, 0)
-            ok = f >= (20000 if len(w) <= 2 else 300 if len(w) == 3 else 1)
+            ok = w in CURTAS_OK or f >= (20000 if len(w) <= 2 else 300 if len(w) == 3 else 1)
             nota += len(w) if ok else -1.5 * len(w)      # por letra: "in o" nao vale mais que "indo"
         return nota
 
@@ -456,6 +461,12 @@ class Leitor:
             self.ultima_txt = self.repetir
         self._zerar()
 
+    def _eco(self, texto):
+        """A outra pessoa perguntando de volta a mesma coisa: "Meditar." / "Meditar?" (23/11)."""
+        u = getattr(self, "ultima_txt", "") or ""
+        return (len(texto.split()) <= 4 and texto.rstrip("\"' ").endswith("?")
+                and u.rstrip("\"' ")[-1:] in ".!…" and normalizar(texto) == normalizar(u))
+
     def _ja_falada(self, norm, agora):
         u = self.ultima
         if not u or agora - u[1] > self.cfg.get("memoria_s", 3):
@@ -464,7 +475,7 @@ class Leitor:
         return n <= len(u[0]) + 2 and parecidos(u[0][:n], norm) and not inicio_trocado(u[0], norm)
 
     def _emitir(self, frases, agora):
-        if self._ja_falada(self.falado_norm, agora):
+        if self._ja_falada(self.falado_norm, agora) and not (len(frases) == 1 and self._eco(frases[0][0])):
             return []
         fala = " ".join(f for f, _ in frases)
         nova = not self.falou
@@ -523,6 +534,41 @@ class Leitor:
         self.votos = {}
         return self._emitir([(t, agora)], agora)
 
+    def _trocou_sem_falar(self, total, agora):
+        """A legenda trocou e a anterior NAO foi falada: sem ponto final e cada leitura saindo um pouco
+        diferente, ela nunca "fechava" e sumia ("Ei, você não disse que ela te deu um pé na bunda" /
+        "quando você não quis levar ela?", 23/11). Fala a melhor versao dela se foi lida 4+ vezes."""
+        ant = normalizar(getattr(self, "visto_raw", "") or "")
+        if (self.falado_norm or len(ant) < 12 or not self.recentes_raw or agora - self.recentes_raw[-1][0] > 0.4
+                or semelhanca(ant, total) >= 0.45 or alinhar(ant, total)[0] >= 0.6 or alinhar(total, ant)[0] >= 0.6):
+            return []
+        run = []
+        for t, c in reversed(self.recentes_raw):
+            if agora - t > 3.0 or t < self.sumiu_ate:
+                break
+            if semelhanca(normalizar(c), ant) >= 0.7:
+                run.append((t, c))
+        if len(run) < 4 or agora - run[-1][0] < 0.4:
+            return []
+        melhor = max((c for _, c in run), key=lambda c: (round(self._nota(c)), len(c)))
+        n = normalizar(melhor)
+        # so legenda quase toda de palavras que existem, e que nao e a que acabou de ser falada
+        if self._nota(melhor) < 0.75 * sum(len(w) for w in re.findall(r"[^\W\d_]+", melhor)):
+            return []
+        # duas legendas numa so leitura ("...Tô chapado demais Trabalhador: Porra, odeio m"): cada uma ja
+        # foi (ou vai ser) falada na sua vez (24/11)
+        if re.search(r"[\wÀ-ÿ.!?…]\s[A-ZÀ-Ý][a-zà-ÿ]{2,}(?:\s[\wÀ-ÿ]+){0,2}\s*:\s", melhor):
+            return []
+        u = self.ultima
+        if u and agora - u[1] <= 8.0 and (semelhanca(n, u[0]) >= 0.5 or alinhar(n, u[0])[0] >= 0.6):
+            return []
+        diag.ev("legenda_perdida", texto=melhor, leituras=len(run))
+        self._zerar()
+        self.falado_norm = n
+        saida = self._emitir([(melhor, run[-1][0])], agora)
+        self._fechar(agora)
+        return saida
+
     def tick(self, texto, agora):
         """-> [(texto_para_falar, pagina_nova, visto_em)]"""
         if not texto:
@@ -559,8 +605,11 @@ class Leitor:
             # Pra botar na agenda?"): nao vota, senao o pedaco ganha e e falado (15/11)
             self.recentes_raw.append((agora, texto))
             return []
+        perdida = self._trocou_sem_falar(total, agora)
         self.visto_raw = texto
         self.recentes_raw.append((agora, texto))
+        if perdida:
+            return perdida
         if (crescendo and len(self.visto[0]) >= 4 and total.startswith(self.visto[0][:max(4, len(self.visto[0]) - 2)])):
             self.digitando = True          # esta legenda foi vista CRESCENDO (texto sendo digitado)
         self.visto = (total, agora)
@@ -573,7 +622,8 @@ class Leitor:
         # A MESMA legenda voltando depois de uma leitura ruim do OCR (fundo claro faz o texto
         # "piscar"): comeca com o que acabou de ser falado -> continua dela, falando so o resto
         # (antes repetia a frase inteira: "Bom, na minha juventude," + a frase toda de novo)
-        if not self.falado_norm and self.ultima and agora - self.ultima[1] <= 4.0 and len(self.ultima[0]) >= 6:
+        if (not self.falado_norm and self.ultima and agora - self.ultima[1] <= 4.0 and len(self.ultima[0]) >= 6
+                and not self._eco(texto)):
             ach, fim_u = alinhar(self.ultima[0], total)
             if ach >= 0.85:
                 self.falado_norm, self.falou = self.ultima[0], True
@@ -611,7 +661,7 @@ class Leitor:
                 # Mas se a legenda apareceu INTEIRA de uma vez (RDR2, GTA, filmes), nao vai crescer:
                 # 0,4 s bastam (antes 0,7 s; "Srta. Gaskill...", "Capítulo 1: Colter", 14/11)
                 need = (self.estab if completa else self.sem_pont if getattr(self, "digitando", False)
-                        else max(self.estab, float(self.cfg.get("sem_pontuacao_inteira_ms", 400)) / 1000))
+                        else max(self.estab, float(self.cfg.get("sem_pontuacao_inteira_ms", 300)) / 1000))
                 fechada = v[0] >= max(2, round(need / self.intervalo * 0.75)) and agora - v[1] >= need
                 if j == 0 and not self.falado_norm:
                     # OCR instavel (cada leitura sai diferente: fundo claro atras da legenda): espera

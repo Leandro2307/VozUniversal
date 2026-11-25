@@ -15,6 +15,9 @@ from PIL import Image
 from .diagnostico import diag
 from .identidade import Elenco, ROTULOS, Visao
 from .leitor import Leitor, dividir_frases
+from .limpeza import (DitaHaPouco, Objetivos, SemNomeRepetida, aviso_do_ps5, botao_do_jogo, consertar_palavras_do_nome,
+                      nome_sem_fala, objetivo_com_dono, pedaco_de_objetivo, placar, prefixo_estragado,
+                      sujeira_no_comeco, tirar_dica, tirar_idioma)
 from .perfil import Perfil
 from .tela import (Descobridor, DetectorVideo, Dicionario, eh_relogio,Janela, achar_legenda, capturar, em_ordem, limpar, ocr_linhas, regiao_em_tela,
                    separar_nome, separar_falantes, eh_figurante, tirar_idioma, nome_estavel, suavizar, isolar_contorno,
@@ -59,6 +62,9 @@ class Nucleo:
         from .sala import Sala
         self.exe_frente = ""               # programa da janela da frente (modo tela/video)
         self.jan = Janela(cfg)            # antes do abafador: a linha dele ja usa self.jan
+        self._sem_nome = SemNomeRepetida(float(cfg.get("sem_nome_repete_s", 180)))
+        self._dita = DitaHaPouco()
+        self._objetivos = Objetivos()
         self.sala = Sala(self)             # o PS5 direto da Sala 3D (video e som pela rede)
         self.jan.sala = self.sala
         self.abafador = Abafador(cfg, self.narr, self._exe_do_som)
@@ -325,6 +331,11 @@ class Nucleo:
             return ""
         if b.isupper() and len(b) > 3:
             b = b.title()
+        from .tela import _FREQ, _VERBOS_OBJETIVO
+        b = consertar_palavras_do_nome(b, _FREQ)
+        ps = re.split(r"[\s.]+", b)
+        if len(ps) >= 2 and ps[0].lower() in _VERBOS_OBJETIVO:
+            return ""                      # "Fale.com o": objetivo da missao lido como nome (23/11)
         # "Pessoa desconhecida 1" e "... 2" sao pessoas DIFERENTES: o numero nunca some nem se
         # aproxima de outro; so a parte de texto e consertada ("V)essoa"/"Qessoa" -> "Pessoa")
         m_pd = re.fullmatch(r"\W*\w{0,2}\W*essoa\s+desconhecid[ao](?:\s+(\d{1,2}))?", b, re.I)
@@ -335,6 +346,18 @@ class Nucleo:
             return f"{m_num.group(1).strip()} {m_num.group(2)}"
         conhecidos = {normalizar(n): n for n in (self.perfil.personagens if self.perfil else {})}
         n = normalizar(b)
+        # so o fim do nome de quem falou ha pouco ("Final" = "Capítulo Final", 24/11: ficha e voz novas)
+        if " " not in b and len(n) >= 5 and b[:1].isupper():
+            from .identidade import nome_valido
+            donos = [v for k, v in conhecidos.items() if " " in v and normalizar(v.split()[-1]) == n
+                     and time.time() - getattr(self, "_falou_t", {}).get(k, 0) <= 120]
+            if len(donos) == 1 and not nome_valido(n):
+                return donos[0]
+        if len(b.split()) >= 4:                # "Contato Na Doze do Diabo" = "Contato da Doze do Diabo"
+            longos = [v for k, v in conhecidos.items() if len(v.split()) >= 4 and n != k
+                      and difflib.SequenceMatcher(None, n, k).ratio() >= 0.85]
+            if n not in conhecidos and len(longos) == 1:
+                return longos[0]
         if n not in conhecidos and n in getattr(self, "palavras_vistas", {}) and b[:1].isupper():
             return b                       # escrito igual no meio de uma fala: e nome de verdade
         from .identidade import nome_valido, nomes_proprios
@@ -953,6 +976,13 @@ class Nucleo:
         pers = (self.perfil.personagens if getattr(self, "perfil", None) else {}) or {}
         return sum(1 for f in pers.values() if f.get("falas", 0) >= 3 and not f.get("anonimo")) >= 5
 
+    def _perfil_com_nomes(self):
+        """O jogo poe nome nas legendas (GTA, RDR2): vale o perfil salvo, nao so as ultimas falas (o objetivo
+        repetido sem nome enchia as ultimas e o jogo passava a parecer sem nomes, 23/11)."""
+        pers = (self.perfil.personagens if getattr(self, "perfil", None) else {}) or {}
+        return (sum(1 for f in pers.values() if f.get("falas", 0) >= 3 and not f.get("anonimo")) >= 5
+                or self._video_com_nomes())
+
     def _lixo_sem_nome(self, fala):
         """Legenda sem nome, num video com nomes, com metade das palavras inexistentes: objetivo lido
         num fundo claro ("rogu Idnr de recompensas.", 15/11). Nao e fala de ninguem."""
@@ -1076,6 +1106,10 @@ class Nucleo:
                 cores.append(h)
         com_nome = [i for i, (n, _) in enumerate(falantes) if n]
         tons = {i: (cores[k] if k < len(cores) else None) for k, i in enumerate(com_nome)}
+        self._cores_lidas = getattr(self, "_cores_lidas", None) or collections.deque(maxlen=80)
+        for i, h in tons.items():
+            if h is not None:
+                self._cores_lidas.append((time.time(), falantes[i][0], h, falantes[i][1]))
         conhecidas = getattr(self, "_cores_nome", None)
         if conhecidas is None:
             conhecidas = self._cores_nome = {}          # nome base -> [(tom, rotulo)]
@@ -1107,6 +1141,51 @@ class Nucleo:
         if len(saida) == 1 and saida[0][0] != falantes[0][0]:
             self._nome_cor_unico = saida[0][0]
         return saida
+
+    def _cor_da_fala(self, base, fala, agora):
+        """Cor (da paleta do jogo) do nome lido junto com esta fala, pela maioria das leituras, ou None."""
+        from .tela import cor_da_paleta
+        p0 = normalizar(base.split()[0])[:6]
+        votos = collections.Counter(
+            cor_da_paleta(h) for t, n, h, tx in getattr(self, "_cores_lidas", None) or ()
+            if agora - t <= 6 and normalizar(n or "")[:6] == p0 and self._mesmo_texto(fala, tx))
+        return votos.most_common(1)[0][0] if votos else None
+
+    def _voz_do_figurante(self, base, fala, f, nova, agora):
+        """Nome generico ("Pessoa desconhecida", "Pessoa local"): cada COR de nome na cena e uma pessoa, com
+        a sua voz (no GTA 6 a Lucia e sempre ciano, o Jason amarelo, e cada figurante tem a sua cor; medido
+        em 3.500 quadros, 24/11). "Obrigada" / "Tô ansioso" dizem se ESTA pessoa e mulher ou homem. A voz nao
+        muda dentro da mesma legenda. -> ficha da voz ({voz, tom, vel, categoria})."""
+        from .identidade import _sexo_da_categoria, categoria_de, eh_generico, pistas_texto
+        if not base or f.get("fixo") or not f.get("voz") or not eh_generico(base):
+            return f
+        ult = getattr(self, "_fig_ult", None)
+        if not nova and ult and ult[0] == base and agora - ult[2] <= 10:
+            self._fig_ult = (base, ult[1], agora)
+            return ult[1]
+        figs = self._figs = {k: v for k, v in getattr(self, "_figs", {}).items() if agora - v["t"] <= 180}
+        cor = self._cor_da_fala(base, fala, agora)
+        sexos = {p[1] for p in pistas_texto(fala) if p[0] == "s"}
+        sx = sexos.pop() if len(sexos) == 1 else None
+        s = figs.get((base, cor)) if cor else None
+        cat = s["categoria"] if s else f["categoria"]
+        if sx and sx != _sexo_da_categoria(cat):
+            cat = categoria_de(sx, "adulto")
+        if not s or s["categoria"] != cat:
+            da_cena = [v for k, v in figs.items() if k[0] == base]
+            if cat == f["categoria"] and (not cor or not any(v["voz"] == f["voz"] for v in da_cena)):
+                s = {"voz": f["voz"], "tom": f.get("tom", 1.0), "vel": f.get("vel", 1.0)}
+            else:
+                v, tom, vel = self.elenco._voz_para(f"{base} {cor or sx}", cat,
+                                                    ocupadas=[x["voz"] for x in figs.values()] + [f["voz"]])
+                s = {"voz": v, "tom": tom, "vel": vel} if v else dict(f)
+                diag.ev("figurante", base=base, cor=cor, categoria=cat, voz=s["voz"], texto=fala[:40])
+            s["categoria"] = cat
+        s["t"] = agora
+        if cor:
+            figs[(base, cor)] = s
+        self._fig_ult = (base, s, agora)
+        return s
 
     def _falar_empilhadas(self, agora):
         """Legendas de CIMA de um bloco empilhado (multidao, ver separar_falantes): cada uma na voz de
@@ -1182,6 +1261,7 @@ class Nucleo:
             diag.ev("legenda_empilhada", quem=quem, texto=" ".join(frases)[:80], figurante=fig, fundo=fundo)
             if quem and self.elenco:
                 f = self.elenco.observar(quem, " ".join(frases))
+                f = self._voz_do_figurante(quem, " ".join(frases), f, True, agora)
                 for i, fr in enumerate(frases):
                     self.narr.falar(fr, f["voz"], f.get("tom", 1.0), f.get("vel", 1.0), quem=quem,
                                     categoria=f["categoria"], nova=i == 0, visto=v[0], figurante=fig, fundo=fundo)
@@ -1200,7 +1280,7 @@ class Nucleo:
         # resto de um nome cortado pelo OCR ("Luc|ia: Só água.", "lá: Vai na minha...", "s: Porra, ele
         # tá..."): 1-3 letras minusculas + ":" no comeco nunca sao fala (eram faladas, GTA 6 18/11).
         # Consoante solta antes de uma Maiuscula tambem e sujeira ("s Não, não, tá de boa.")
-        fala = re.sub(r"^\W{0,2}[a-zà-ÿ]{1,3}\s*:\s+(?=\S)", "", fala)
+        fala = re.sub(r"^\W{0,2}[a-zà-ÿ]{1,3}[.;,'\"]?\s*:\s+(?=\S)", "", fala)      # ("sor.: Me manda", 23/11)
         fala = re.sub(r"^[bcdfghjklmnpqrstvwxz]\s+(?=[A-ZÀ-Ý])", "", fala)
         if not self.perfil or not self.perfil.personagens:
             return "", fala
@@ -1240,13 +1320,25 @@ class Nucleo:
         # comeu o ":" de um personagem JA CONHECIDO e a fala segue com uma palavra comum em
         # Maiuscula (GTA 6 22/11: falava o nome e saia na voz do narrador). "Jason Duval." nao
         # separa: "Duval" nao e palavra comum do portugues.
-        m = re.match(r"^\W{0,2}([A-ZÀ-Ý][a-zà-ÿ]{2,15}(?:\s[a-zà-ÿ]{3,12}|\s\d{1,2})?)\.?\s+([A-ZÀ-Ý][a-zà-ÿ]*)(.*)$", fala)
+        m = re.match(r"^\W{0,2}([A-ZÀ-Ý][a-zà-ÿ]{2,15}(?:\s[a-zà-ÿ]{3,12}|\s\d{1,2})?)([.,]?)\s+([A-ZÀ-Ý][a-zà-ÿ]*)(.*)$", fala)
+        if m and m.group(2) == "," and " " not in m.group(1):
+            m = None                       # "Lucia, Você..." chama a Lucia; "Pessoa local, Toma juízo" nao
         if m and self.dic.ok:
             nome = self._nome_canonico(m.group(1))
+            # "Luci Bom, ouvi falar..." (nome cortado de quem falou no ultimo minuto, 24/11)
+            p = normalizar(m.group(1))
+            if nome not in conhecidos or normalizar(nome) != p:
+                cort = [k for k in conhecidos if len(p) >= 4 and len(p) >= len(normalizar(k)) - 2
+                        and normalizar(k).startswith(p) and self.dic.freq.get(m.group(1).lower(), 0) < 1000
+                        and time.time() - getattr(self, "_falou_t", {}).get(normalizar(k), 0) <= 60]
+                if len(cort) == 1 and self.dic.freq.get(m.group(3).lower(), 0) >= 50000:
+                    diag.ev("nome_na_fala", lido=m.group(1), nome=cort[0])
+                    return cort[0], (m.group(3) + m.group(4)).strip()
             if (nome in conhecidos and normalizar(nome) == normalizar(m.group(1))
-                    and self.dic.freq.get(m.group(2).lower(), 0) >= 50000):    # palavra comum, nao sobrenome
+                    and self.dic.freq.get(m.group(3).lower(), 0)               # palavra comum, nao sobrenome
+                    >= (1000 if " " in nome else 50000)):
                 diag.ev("nome_na_fala", lido=m.group(1), nome=nome)
-                return nome, (m.group(2) + m.group(3)).strip()
+                return nome, (m.group(3) + m.group(4)).strip()
         m = re.match(r"^([A-ZÀ-Ý][a-zà-ÿ]{2,15})\s+([a-zà-ÿ].*)$", fala)
         if m and m.group(1) in conhecidos:
             agora = time.time()
@@ -1665,7 +1757,14 @@ class Nucleo:
                 ult_sistema = t0
                 self._sistema()
             self._talvez_carregar_visao()
-            time.sleep(max(0.01, self.cfg["intervalo_ms"] / 1000 - (time.time() - t0)))
+            resta = self.cfg["intervalo_ms"] / 1000 - (time.time() - t0)
+            if self.na_sala() and self.sala.conectada:
+                # le cada quadro do PS5 assim que ele chega (o relogio proprio deixava o quadro esperando
+                # ~55 ms em media); sem quadro novo, segue a cada 0,25 s
+                time.sleep(max(0.005, 0.05 - (time.time() - t0)))
+                self.sala.esperar_quadro(0.25)
+            else:
+                time.sleep(max(0.01, resta))
 
     def _talvez_carregar_visao(self):
         """Carrega a visao (CLIP) num momento CALMO: sem fala sendo gerada/tocada. Carregar no meio de uma fala travava a placa de video e abria um buraco de
@@ -1687,6 +1786,9 @@ class Nucleo:
             self.emitir("status", {"status": s, "pausado": self.pausado})
 
     def _passo(self, sct, agora, ult_procura):
+        if getattr(self, "em_espera", False):      # versao nova carregando (ou antiga saindo): nao le nada
+            time.sleep(0.1)
+            return
         if not self.jan.raiz or not self.area:
             self._mudar_status("aguardando")
             self.leitor.tick("", agora)
@@ -1718,6 +1820,26 @@ class Nucleo:
         if texto is None:
             self._mudar_status("coberto")
             return
+        if texto:
+            nome = nome_sem_fala(nome, texto)
+            if self._modo_legenda() and not self.cfg.get("ler_dicas", False):
+                sem = tirar_dica(texto)
+                if sem != texto:
+                    diag.ev("dica_colada", texto=texto[-60:])
+                    texto = sem
+                    if not texto:
+                        nome = ""
+            if texto and self._modo_legenda() and self._perfil_com_nomes():
+                if not nome:
+                    self._objetivos.viu(texto, agora)
+                else:
+                    sem = self._objetivos.tirar(texto, agora)
+                    if not sem:
+                        nome = ""                # so o objetivo na tela: o nome e da legenda que acabou de sair
+                    elif sem != texto:
+                        diag.ev("objetivo_colado", texto=texto[-50:])
+                        texto = sem
+            texto = tirar_idioma(texto)      # "Espanhol Que se foda isso!" (etiqueta do jogo)
         if self._modo_legenda() and getattr(self, "frente_bloqueada", False):
             self._mudar_status("outra_janela")
         else:
@@ -1747,6 +1869,8 @@ class Nucleo:
         if texto != self.lido:
             diag.ev("leitura", texto=texto, nome=nome)
             self.lido = texto
+            if texto:
+                self.narr.aquecer_placa()        # a voz vem em ~0,15 s: a placa ja vai estar acordada
             self._previa(texto, nome)
             # nomes que aparecem ESCRITOS no meio da fala ("O Signor Bronte vai ficar..."): quando
             # alguem com esse nome falar, ele nao vira outro parecido da lista ("Bonnie")
@@ -1767,6 +1891,8 @@ class Nucleo:
             if self._lixo_curto(fala):
                 diag.ev("descartei", motivo="curta e embaralhada", texto=fala)
                 continue
+            if self._modo_legenda():
+                fala = prefixo_estragado(fala)
             nome_f, fala = self._nome_na_fala(fala)
             fala = self._nomes_no_texto(fala)
             if nome_f:
@@ -1812,6 +1938,8 @@ class Nucleo:
                 inicio = fala.lstrip("\"'“”«»-–— ")
                 # (objetivo logo depois de "Extraoficialmente..." nao e continuacao, 15/11)
                 continua = (ant and ant[0] and agora - ant[2] < 4.0 and not self._eh_objetivo(fala)
+                            and not (ant[1].rstrip()[-1:] in ".!?" and not ant[1].rstrip().endswith("..")
+                                     and pedaco_de_objetivo(fala))       # "até a pista de pouso." (24/11)
                             and (inicio[:1].islower() or ant[1].rstrip()[-1:] in ",;" or ant[1].rstrip().endswith("...")))
                 # nome lido agora e NOVO (ninguem com esse nome falou antes) e a frase continua a
                 # anterior: quase sempre e o nome estragado pelo OCR ("Willie" no lugar de Hosea)
@@ -1829,6 +1957,13 @@ class Nucleo:
                 # do Jason; ele tambem aparece sozinho e sem nome na tela -> e do narrador (22/11)
                 diag.ev("objetivo_sem_dono", era=self.nome_pagina, texto=fala[:40])
                 self.nome_pagina = ""
+            elif (self.nome_pagina and (not nova or self.nome_pagina in fala.split()) and self._modo_legenda()
+                    and self.na_sala() and self._perfil_com_nomes()
+                    and objetivo_com_dono(sujeira_no_comeco(fala, self.nome_pagina))):
+                # "Siga o Donnie." grudado na fala do Jason, antes de ser visto sozinho; "Resgate o Donnie de
+                # novo." como Donnie (24/11). So no PS5: no RDR2 os personagens falam no imperativo formal
+                diag.ev("objetivo_sem_dono", era=self.nome_pagina, texto=fala[:40], regra="formal")
+                self.nome_pagina = ""
             if self.nome_pagina and len(fala.split()) >= 3:
                 # nome de quem fala colado no comeco, estragado pelo OCR ("Trelawnv ligados a Cole...",
                 # quem fala e o Trelawny, 15/11): tira a 1a palavra se parece o nome e o resto segue
@@ -1840,6 +1975,30 @@ class Nucleo:
                         and difflib.SequenceMatcher(None, normalizar(limpo), normalizar(self.nome_pagina)).ratio() >= 0.7):
                     diag.ev("nome_tirado_da_fala", lido=p1, quem=self.nome_pagina)
                     fala = resto
+            if self._modo_legenda():
+                limpa = sujeira_no_comeco(fala, self.nome_pagina)
+                if limpa != fala:
+                    diag.ev("sujeira_no_comeco", lido=fala[:60], virou=limpa[:60], quem=self.nome_pagina)
+                    fala = limpa
+                if not fala:
+                    continue
+                if self.nome_pagina and self._dita.repetida(self.nome_pagina, fala, agora):
+                    diag.ev("descartei", motivo="mesma pessoa, dita ha pouco", texto=fala[:60])
+                    continue
+                if not self.nome_pagina and ((self.na_sala() and aviso_do_ps5(fala))
+                                             or (self._perfil_com_nomes() and (
+                                                 botao_do_jogo(fala) or placar(fala) or pedaco_de_objetivo(fala)
+                                                 or re.search(r"[a-zà-ÿ]\d[A-ZÀ-Ý]", fala)   # "Tutisfa9Qual"
+                                                 # so o nome de quem vai falar ("Lucia.")
+                                                 or fala.strip(" .:;") in self.perfil.personagens))):
+                    diag.ev("descartei", motivo="aviso do PS5 ou botao", texto=fala[:60])
+                    continue
+                if not self.nome_pagina and len(normalizar(fala)) >= 16:
+                    self._dita.repetida("", fala, agora)       # se o nome aparecer depois, nao fala de novo
+                if not self.nome_pagina and self._perfil_com_nomes() and self._sem_nome.repetida(fala, agora):
+                    # objetivo/previa do celular que continua na tela: ja foi dito
+                    diag.ev("descartei", motivo="sem nome, ja dita ha pouco", texto=fala[:60])
+                    continue
             self._ult_fala = (self.nome_pagina, fala, agora)
             self._com_nome = getattr(self, "_com_nome", collections.deque(maxlen=12))
             from .tela import _VERBOS_OBJETIVO
@@ -1860,6 +2019,7 @@ class Nucleo:
                         prob = self.visao.classificar(self._olhar(sct, self.area, reg_v))
                     # (se ainda nao esta pronta, _talvez_carregar_visao carrega num momento calmo)
                 f = self.elenco.observar(self.nome_pagina, fala, prob)
+                f = self._voz_do_figurante(self.nome_pagina, fala, f, nova, agora)
                 fig = eh_figurante(self.nome_pagina)
                 # legenda que veio DEPOIS da outra (conversa normal) entra na fila, mesmo de figurante:
                 # no fundo ela tocava por cima da fala anterior ("Ei, você é uma doida" + "Vai se foder"

@@ -304,6 +304,109 @@ def capturar(sct, reg):
 
 
 # ----------------------------------------------------------------- OCR
+def acento_em_cima(img, x, y, w, h):
+    """O "E"/"e" lido na caixa (x, y, w, h) tem o acento agudo desenhado em cima? O OCR do Windows perde
+    o acento do "É" na legenda (24/11: "E melhor abaixar" na tela era "É melhor abaixar")."""
+    if w < 3 or h < 6:
+        return False
+    if _acento(img, x, y, w, h, False):
+        return True
+    # leitura em preto sobre branco (suavizar/isolar_contorno): cinza puro e quase toda clara
+    m = np.asarray(img.crop((max(0, int(x - 2 * h)), max(0, int(y - h / 2)), min(img.width, int(x + 5 * h)),
+                             min(img.height, int(y + 1.5 * h)))).convert("RGB")).astype(np.int16)
+    return bool((m.max(-1) == m.min(-1)).all() and np.median(m) > 225 and _acento(img, x, y, w, h, True))
+
+
+def _acento(img, x, y, w, h, escuro):
+    ax0, ax1 = max(0, int(x - 0.35 * w)), min(img.width, int(round(x + 1.35 * w)) + 1)
+    ay0, ay1 = max(0, int(y - 0.65 * h)), min(img.height, int(round(y + h)) + 1)
+    if ax1 - ax0 < 4 or ay1 - ay0 < 8:
+        return False
+    a = np.asarray(img.crop((ax0, ay0, ax1, ay1)).convert("RGB")).astype(np.int16)
+    g = a.min(-1)                                   # texto branco: os 3 canais altos
+    if escuro:
+        g = 255 - a.max(-1)
+    bx0, by0 = int(round(x)) - ax0, int(round(y)) - ay0
+    bx1 = bx0 + max(2, int(round(w)))
+    corpo = g[max(0, by0):, max(0, bx0):bx1]
+    if not corpo.size:
+        return False
+    nivel = np.percentile(corpo, 92)
+    if nivel < 120:
+        return False
+    claro = g >= max(95, 0.62 * nivel)
+    H, L = claro.shape
+    marca = np.zeros((H, L), np.int16)
+    comps = []
+    for i0, j0 in zip(*np.nonzero(claro)):
+        if marca[i0, j0]:
+            continue
+        n = len(comps) + 1
+        pilha, pts = [(i0, j0)], []
+        marca[i0, j0] = n
+        while pilha:
+            i, j = pilha.pop()
+            pts.append((i, j))
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    u, v = i + di, j + dj
+                    if 0 <= u < H and 0 <= v < L and claro[u, v] and not marca[u, v]:
+                        marca[u, v] = n
+                        pilha.append((u, v))
+        comps.append(np.array(pts))
+    # o corpo da letra: o maior pedaco dentro da caixa
+    def dentro(p):
+        return int(((p[:, 0] >= by0) & (p[:, 1] >= bx0 - 1) & (p[:, 1] <= bx1)).sum())
+    if not comps:
+        return False
+    letra = max(comps, key=dentro)
+    topo = int(letra[:, 0].min())
+    e0, e1 = int(letra[:, 1].min()), int(letra[:, 1].max())
+    alt = int(letra[:, 0].max()) - topo + 1
+    larg = e1 - e0 + 1
+    if alt < 0.45 * h or larg > 1.5 * w + 2:
+        return False                                # letra grudada no fundo claro: nao da para saber
+    for p in comps:
+        if p is letra or len(p) < 3:
+            continue
+        pt, pb = int(p[:, 0].min()), int(p[:, 0].max())
+        p0, p1 = int(p[:, 1].min()), int(p[:, 1].max())
+        if pb >= topo or pt == 0:                   # tem de estar inteiro acima da letra
+            continue
+        ph, pw = pb - pt + 1, p1 - p0 + 1
+        meio = (p0 + p1) / 2
+        if not (e0 + 0.12 * larg <= meio <= e1 + 0.12 * larg) or p0 < e0 - 1 or p1 > e1 + 0.25 * larg + 1:
+            continue
+        if topo - pb > 0.28 * alt + 1:              # longe demais da letra (linha de cima, HUD)
+            continue
+        if not 0.10 * alt <= ph <= 0.42 * alt + 1 or not 0.15 * larg <= pw <= 0.85 * larg:
+            continue
+        # o acento agudo sobe para a direita: a parte de cima fica a direita da de baixo
+        sob = p[p[:, 0] <= pt + (ph - 1) / 2][:, 1].mean()
+        des = p[p[:, 0] >= pt + (ph - 1) / 2][:, 1].mean()
+        if sob - des < 0.1 and pw > ph + 1:
+            continue
+        return True
+    return False
+
+
+def _com_acento(img, texto, palavras):
+    """Troca "E" por "É" onde o acento aparece na imagem (80 de 80 certos nos quadros de 23 e 24/11)."""
+    toks = texto.split()
+    if len(toks) != len(palavras):
+        return texto
+    mudou = False
+    for i, w in enumerate(palavras):
+        if w.get("text") == "E" and toks[i] == "E":
+            b = w["bounding_rect"]
+            try:
+                if acento_em_cima(img, b["x"], b["y"], b["width"], b["height"]):
+                    toks[i], mudou = "É", True
+            except Exception:
+                pass
+    return " ".join(toks) if mudou else texto
+
+
 def ocr_linhas(img, lingua="pt-BR"):
     """-> [(texto, x0, y0, x1, y1)] em pixels da imagem."""
     esc = 1
@@ -323,7 +426,7 @@ def ocr_linhas(img, lingua="pt-BR"):
         y0 = min(w["bounding_rect"]["y"] for w in ws)
         x1 = max(w["bounding_rect"]["x"] + w["bounding_rect"]["width"] for w in ws)
         y1 = max(w["bounding_rect"]["y"] + w["bounding_rect"]["height"] for w in ws)
-        linhas.append((l.get("text", ""), x0 / esc, y0 / esc, x1 / esc, y1 / esc))
+        linhas.append((_com_acento(img, l.get("text", ""), ws), x0 / esc, y0 / esc, x1 / esc, y1 / esc))
     return linhas
 
 
@@ -837,7 +940,7 @@ class Dicionario:
         for op, i1, i2, j1, j2 in sm.get_opcodes():
             sa, sb = ta[i1:i2], tb[j1:j2]
             if op == "equal" or not sa or not sb:
-                out += sa
+                out += [y if x == "E" and y == "É" else x for x, y in zip(sa, sb)] if op == "equal" else sa
             elif len(sa) == len(sb) and all(self._mesma_sem_1a(x, y) for x, y in zip(sa, sb)):
                 out += sb          # "osso" / "Nosso": a outra leitura viu a 1a letra
             elif (self.desconhecidas(" ".join(sb)) < self.desconhecidas(" ".join(sa))
@@ -1095,7 +1198,7 @@ class Dicionario:
 
 
 # ----------------------------------------------------------------- nome de quem fala
-_PREFIXO = re.compile(r"^\s*[\[【(]?\s*([A-ZÀ-Ý][\wÀ-ÿ'.\- ]{1,26}?)\s*[\]】)]?\s*[:：]\s*(.+)$")
+_PREFIXO = re.compile(r"^\s*[\[【(]?\s*([A-ZÀ-Ý][\wÀ-ÿ'.\- ]{1,35}?)\s*[\]】)]?\s*[:：]\s*(.+)$")
 _PALAVRAS_NAO_NOME = {"sim", "nao", "não", "ok", "voltar", "sair", "continuar", "menu", "opcoes", "opções",
                       "salvar", "carregar", "pular", "falar", "abrir", "pegar", "aceitar", "cancelar"}
 
@@ -1202,12 +1305,33 @@ _VERBOS_OBJETIVO = set("""derrote siga va vá pegue mate encontre volte proteja 
  coloque ponha vista tire selecione abra feche acenda apague retire recupere dirija atravesse cruze chegue
  alimente escove acalme laceie lace sele domine guarde jogue carregue empurre arrombe
  capture resgate salve cace esfole pesque amanse leve-o leve-a solte dome desmonte
- passe faça faca aguarde ganhe aposte vença venca assista termine participe""".split())
+ passe faça faca aguarde ganhe aposte vença venca assista termine participe
+ voe pouse pilote decole aterrisse limpe estacione despiste livre-se
+ escolte manobre detenha desamarre ache peça peca impeça impeca intercepte neutralize rastreie
+ confronte interrogue sequestre""".split())
+
+
+_LIGACAO_NOME = {"da", "do", "de", "das", "dos"}
+
+
+def _nome_longo(t):
+    """ "Contato da Doze do Diabo": cargo com 4-6 palavras. Era narrado inteiro, a cada fala (GTA 6, 24/11).
+    Todas com Maiuscula menos as de ligacao, e pelo menos uma de ligacao (titulo solto nao cai aqui)."""
+    ps = (t or "").strip().split()
+    return (4 <= len(ps) <= 6 and len(t) <= 36 and any(p in _LIGACAO_NOME for p in ps)
+            and all(p in _LIGACAO_NOME or re.fullmatch(r"[A-ZÀ-Ý][a-zà-ÿ]+", p) for p in ps)
+            and ps[0][:1].isupper() and ps[-1][:1].isupper()
+            and ps[0].lower() not in _NAO_COMECA_NOME | _NAO_E_NOME and ps[0].lower() not in _VERBOS_OBJETIVO
+            and not any(p.lower() in _PALAVRAS_DE_FALA for p in ps))
 
 
 def _cara_de_nome(t):
     t = t.strip()
-    if not t or t[-1:] in FIM + ",;" or len(t) > 28:
+    if not t or t[-1:] in FIM + ",;":
+        return False
+    if _nome_longo(t):
+        return True
+    if len(t) > 28:
         return False
     ps = t.split()
     if not 1 <= len(ps) <= 3:
@@ -1229,7 +1353,7 @@ def _cara_de_nome(t):
     # 3+ letras: "Bo" (pedaco de "Bom, o Brian...") virava quem fala (15/11)
     if len(letras) < 3 or any(c.isdigit() for c in letras):
         return False
-    if ps[0].lower() in _VERBOS_OBJETIVO:
+    if re.split(r"[.\s]", ps[0].lower())[0] in _VERBOS_OBJETIVO:    # ("Fale.com o": o OCR pos um ponto)
         return False                                  # "Derrote o atacante" nao e "Derrote: ..."
     # Nome Proprio, NOME EM CAIXA ALTA, ou "Dono da Loja"
     return ps[0][:1].isupper() and all(p[:1].isupper() or len(p) <= 3 for p in ps)
@@ -1249,6 +1373,16 @@ _NAO_COMECA_NOME = {"ele", "ela", "eu", "voce", "você", "voces", "vocês", "nos
 def consertar_prefixo(linha):
     """Arruma o comeco de uma linha "Nome: fala" lida com erro ("l)utch:" -> "Dutch:")."""
     t = linha[0]
+    # "Pessoa: desconhecida: Não grita", "pessoas locais: Ei", "F) desconhecida: No verão" (24/11)
+    mp = re.match(r"^\W{0,3}(?:(\S{1,9})\s+)?(desconhecid[oa]s?|loca(?:l|is))\s*:\s+(?=\S)", t, re.I)
+    if mp:
+        a = re.sub(r"\W", "", mp.group(1) or "").lower()
+        if len(a) <= 2 or difflib.SequenceMatcher(None, a, "pessoa").ratio() >= 0.6:
+            seg = mp.group(2).lower()
+            certo = ("Pessoas " if seg.endswith("s") else "Pessoa ") + seg + ": " + t[mp.end():]
+            if certo != t:
+                t = certo
+                linha = (t,) + tuple(linha[1:])
     # tracinho/aspas soltos antes do nome ("- Ilosea: E melhor...")
     sem_lixo = re.sub(r"^[\s\-–—•·'\"]+(?=[A-Za-zÀ-ÿ|(])", "", t)
     if sem_lixo != t and re.match(r"^\S{2,20}\s*:", sem_lixo):
@@ -1367,7 +1501,7 @@ def separar_nome(linhas, zona_nome=None, tam=None):
         ult = consertar_prefixo((m_ult.group(2) + ": x",))[0].split(":")[0]
         if ult[:1].isupper() and _cara_de_nome(ult) and ult.lower() not in _NAO_COMECA_NOME:
             return ult, [(m_ult.group(3),) + tuple(primeira[1:])] + linhas[1:]
-    if len(linhas) >= 2 and _cara_de_nome(primeira[0]):
+    if len(linhas) >= 2 and _cara_de_nome(primeira[0]) and not _nome_longo(primeira[0]):
         seg = linhas[1]
         sozinha = not any(abs(((l[2] + l[4]) / 2) - ((primeira[2] + primeira[4]) / 2)) < 0.5 * (primeira[4] - primeira[2])
                           for l in linhas[1:])
@@ -1468,6 +1602,14 @@ def cor_do_nome(img, linha, escala=1.0):
 def nome_da_cor(h):
     """Tom (graus) -> nome da cor, so para o rotulo ("Pessoa local (rosa)")."""
     return next(nome for lim, nome in _CORES if h < lim)
+
+
+# cores que o GTA 6 da aos nomes (quadros de 23 e 24/11): (tom, rotulo)
+_PALETA = [(35, "laranja"), (67, "amarelo"), (156, "verde"), (177, "ciano"), (298, "roxo"), (352, "rosa")]
+
+
+def cor_da_paleta(h):
+    return min(_PALETA, key=lambda c: distancia_cor(c[0], h))[1]
 
 
 def distancia_cor(a, b):

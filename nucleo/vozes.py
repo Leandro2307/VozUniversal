@@ -42,7 +42,10 @@ def expandir_abreviacoes(t):
 _E_VERBO = ("claro|sério|serio|verdade|melhor|pior|foda|tarde|cedo|demais|possível|impossível|fácil|"
             "difícil|perigoso|perigosa|óbvio|normal|estranho|estranha|engraçado|engraçada|legal|errado|"
             "errada|culpa|hora|nóis|nois|tipo isso|o seguinte|isso aí|isso ai|isso mesmo|agora ou nunca|"
-            "minha vez|sua vez|nossa vez|pra já|pra ja|por isso|lógico|logico|uma pena|um prazer")
+            "minha vez|sua vez|nossa vez|pra já|pra ja|por isso|lógico|logico|uma pena|um prazer|"
+            # GTA 6, 24/11: em todas as sessoes guardadas, sempre "É"
+            "bom|boa|um saco|uma merda|pura|puro|logo ali|logo aqui|sempre um|sempre uma|pra isso que|"
+            "ele que tá|ela que tá|só um|só uma|só isso|só não|só me|só te")
 # ...e estas so com a frase acabando logo depois ("E isso." = "É isso.", mas "E isso que você fez?";
 # "É mesmo?", mas "E mesmo assim..."; "É meu!", mas "E meu irmão?")
 _E_VERBO_FIM = "isso|mesmo|assim|sempre|bom|boa|ruim|certo|certa|justo|meu|minha|seu|sua|nosso|nossa|dele|dela"
@@ -78,12 +81,23 @@ _RE_TA = re.compile(r"\b(você|voce|cê|ce|ele|ela|eles|elas|isso|isto|tudo|que|
 _RE_DAI = re.compile(r"\b([Dd])ai\b(?!-)")
 
 
+# "E só superstição!" "E só falar com ele." "E só a TV que ficou ligada." "E alugado!"
+_RE_E_SO = re.compile(r"(^|[.!?…]\s+)E(?=\s+só\s+(?:[\wÀ-ÿ-]+\s*[.!]|[\wÀ-ÿ]+[aei]r\b|[ao]s?\s+[^.!?…]*\bque\b)"
+                      r"|\s+(?!obrigad|coitad)[\wÀ-ÿ]{3,}[ai]d[oa]\s*[.!])")
+
+
+# "Ah, há, posso pegar..." / "Há... sinto muito": hesitacao ("hã") lida sem o til (24/11)
+_RE_HA = re.compile(r"((?:^|[.!?…,])\s*)([Hh]á)(?=\s*(?:,|\.{2,}|…))")
+
+
 def acentuar_e(t):
     t = _RE_E_VERBO.sub(r"\1É", t)
+    t = _RE_E_SO.sub(r"\1É", t)
     t = _RE_E_UM.sub(r"\1É", t)
     t = _RE_E_POSSE.sub(_e_posse, t)
     t = _RE_VOCATIVO.sub(r"\1\2,\3\4", t)
     t = _RE_TA.sub(r"\1\2tá", t)
+    t = _RE_HA.sub(lambda m: m.group(1) + ("Hã" if m.group(2) == "Há" else "hã"), t)
     return _RE_DAI.sub(lambda m: m.group(1) + "aí", t)
 
 
@@ -133,6 +147,73 @@ def comeca_com_interjeicao(texto):
 def so_interjeicao(texto):
     """ "Ah...", "Oh.", "Hm" (nada mais na fala)."""
     return comeca_com_interjeicao(texto) and not re.search(r"[^\W\d_]", _RE_INTERJEICAO.sub("", texto, count=1))
+
+
+# "Ah, sabe como é": com a virgula (ou reticencias) o XTTS fala "Ah" e para 0,35 a 0,57 s antes da
+# palavra seguinte, como se fosse outra frase (24/11, medido com jason, lucia e outras). Sem a virgula
+# o "Ah" entra na mesma entonacao do resto.
+_RE_INTERJ_VIRGULA = re.compile(r"((?:^|[.!?…,]\s+)(?:a+h+\s+)*(?:a+h+|o+h+|u+h+|e+h+|hã+|hu+m+|h+m+))\s*(?:,|\.{2,}|…)\s+(?=[^\W\d_])", re.I)
+
+
+def emendar_interjeicao(t):
+    for _ in range(3):                             # "Ah, ah, Mattia"
+        novo = _RE_INTERJ_VIRGULA.sub(r"\1 ", t)
+        if novo == t:
+            break
+        t = novo
+    return t
+
+
+def pausa_interjeicao(texto):
+    """Pausa (s) que cabe depois da interjeicao do comeco: "Ah, não" quase nada; "Ah! Lucia!" um pouco."""
+    m = _RE_INTERJEICAO.match(texto or "")
+    return 0.16 if m and re.match(r"\s*[!?]", texto[m.end():]) else 0.06
+
+
+def encurtar_pausa(w, sr, alvo, ate=0.45):
+    """Encurta para `alvo` segundos a 1a pausa do audio, se ela comecar ate `ate` segundos depois do 1o som
+    (mais tarde que isso o "Ah" ja emendou e a pausa e da frase seguinte: fica)."""
+    w = np.asarray(w, dtype=np.float32)
+    q = int(sr * 0.01)
+    nq = len(w) // q
+    if nq < 20:
+        return w
+    env = np.sqrt(np.mean(w[:nq * q].reshape(nq, q) ** 2, axis=1))
+    som = env > max(0.006, 0.07 * float(env.max()))
+    ini = next((i for i in range(nq) if som[i]), nq)
+    i = ini
+    while i < nq and (i - ini) * 0.01 < ate:
+        if not som[i]:
+            f = i
+            while f < nq and not som[f]:
+                f += 1
+            if f >= nq:
+                return w                           # o som ainda nao voltou: nao da para saber
+            if (f - i) * 0.01 > max(0.10, alvo + 0.03):
+                tira = int(((f - i) * 0.01 - alvo) * sr)
+                meio = (i + f) * q // 2
+                a, b = meio - tira // 2, meio - tira // 2 + tira
+                n = min(int(sr * 0.008), a, len(w) - b)
+                r = np.linspace(0, 1, n, dtype=np.float32)
+                return np.concatenate([w[:a - n], w[a - n:a] * (1 - r) + w[b - n:b] * r, w[b:]])
+            i = f
+        else:
+            i += 1
+    return w
+
+
+def em_silencio(w, sr, janela=0.1):
+    """O fim deste audio e silencio? (a pausa depois do "Ah" ainda nao acabou)"""
+    w = np.asarray(w, dtype=np.float32)
+    fim = w[-int(sr * janela):]
+    return len(fim) > 0 and float(np.sqrt(np.mean(fim ** 2))) < max(0.006, 0.07 * float(np.abs(w).max()) * 0.5)
+
+
+def arrumar_interjeicao(w, sr, frase):
+    """Vogal do tamanho certo e sem o buraco depois dela."""
+    so = so_interjeicao(frase)
+    w = encurtar_interjeicao(w, sr, sozinha=so)
+    return w if so else encurtar_pausa(w, sr, pausa_interjeicao(frase))
 
 
 def encurtar_interjeicao(w, sr, alvo=0.3, folga=0.08, sozinha=False):
@@ -957,7 +1038,7 @@ class MotorClonada:
         final = []
         for f in out:
             final += self._quebrar(f)
-        return [self._sem_ponto(f) for f in final]
+        return [self._sem_ponto(emendar_interjeicao(f)) for f in final]
 
     @staticmethod
     def _quebrar(f, limite=180):
@@ -1039,17 +1120,17 @@ class MotorClonada:
                             feito += len(w)
                             if segurar:
                                 guardado.append(w)
-                                if feito < int(24000 * 1.1) and not cortou:
+                                junto = np.concatenate(guardado)
+                                if not cortou and (feito < int(24000 * 1.1) or (
+                                        feito < int(24000 * 1.9) and em_silencio(junto, 24000))):
                                     continue
-                                w, segurar = encurtar_interjeicao(np.concatenate(guardado), 24000,
-                                                                  sozinha=so_interjeicao(frase)), False
+                                w, segurar = arrumar_interjeicao(junto, 24000, frase), False
                             yield ream(tira(w)), 24000, 0.0
                             if cortou:
                                 partes.close()
                                 break
                     if segurar and guardado:            # a fala inteira coube no que foi segurado
-                        yield ream(tira(encurtar_interjeicao(np.concatenate(guardado), 24000,
-                                                             sozinha=so_interjeicao(frase)))), 24000, 0.0
+                        yield ream(tira(arrumar_interjeicao(np.concatenate(guardado), 24000, frase))), 24000, 0.0
                     if cortou:
                         log(f"✂ Voz {vid}: cortei um trecho estranho no fim de “{frase[:40]}”", tipo="aviso")
                         diag.ev("corte", voz=vid, frase=frase, limite_s=round(limite / 24000, 2))
@@ -1070,7 +1151,7 @@ class MotorClonada:
             tira = TiraSilencio(24000)
             w = aparar(w[:limite].astype(np.float32), 24000)
             if comeca_com_interjeicao(frase):
-                w = encurtar_interjeicao(w, 24000, sozinha=so_interjeicao(frase))
+                w = arrumar_interjeicao(w, 24000, frase)
             w = tira(w)
             yield ream(np.concatenate([w, tira.fim()])), 24000, pausa
 
@@ -1889,13 +1970,16 @@ class Narrador:
         r = 1.0 if atraso < 1.3 else 1.0 + (atraso - 1.3) * 0.2
         return min(float(self.cfg.get("acelerar_ate", 1.35)), max(r, self._ritmo(pag, dur)))
 
-    def _repetido(self, texto):
+    def _repetido(self, texto, quem=""):
         agora = time.time()
         n = normalizar(texto)
         pal = [normalizar(w) for w in texto.split() if normalizar(w)]
-        for n0, pal0, t0 in self.recentes:
+        fim = texto.rstrip("\"' )")[-1:]
+        for n0, pal0, t0, quem0, fim0 in self.recentes:
             if agora - t0 > 12:
                 continue
+            if quem and quem0 and quem != quem0 and fim != fim0 and "?" in (fim, fim0) and len(pal) <= 4:
+                continue             # a OUTRA pessoa perguntando de volta: "Meditar." / "Meditar?" (23/11)
             if n == n0 and len(n) >= 4:
                 return True      # a mesma legenda de novo (piscou na tela): nao repete
             # pedaco de uma fala dita ha pouco (o OCR leu so um trecho dela): mesma ordem, 3+ palavras
@@ -1906,7 +1990,7 @@ class Narrador:
             # vezes seguidas (GTA 6, 18/11)
             if agora - t0 <= 8 and min(len(n), len(n0)) >= 12 and semelhanca(n, n0) >= 0.9:
                 return True
-        self.recentes.append((n, set(pal), agora))
+        self.recentes.append((n, set(pal), agora, quem, fim))
         return False
 
     def _pressa(self, visto, pag):
@@ -1956,6 +2040,60 @@ class Narrador:
                     self._para_tocador(x)
                 pend.popleft()
 
+    def aquecer_placa(self):
+        """Parada ha uns segundos, a placa baixa o clock e o 1o pedaco da voz demorava 350-545 ms em vez de
+        ~210 (38 falas, 23/11). Na 1a leitura da legenda da um servicinho a ela (ate 0,35 s, ou ate a voz
+        comecar a gerar), enquanto o leitor ainda confirma o texto."""
+        c = self.clonada
+        agora = time.time()
+        if (c is None or c.dev == "cpu" or not self.cfg.get("aquecer_placa", True) or self.motor_atual() is not c
+                or agora - getattr(self, "placa_usada", 0.0) < 1.5 or agora - getattr(self, "placa_aquecida", 0.0) < 1.0
+                or self.falando):
+            return
+        self.placa_aquecida = agora
+
+        def servico():
+            while time.time() - agora < 0.35 and getattr(self, "placa_usada", 0.0) < agora:
+                if not self._servico_placa(c):
+                    return
+        threading.Thread(target=servico, daemon=True, name="aquecer").start()
+
+    def _servico_placa(self, c):
+        try:
+            torch = c.torch
+            with torch.inference_mode():
+                if not hasattr(self, "_mat_aquecer"):
+                    self._mat_aquecer = [torch.rand(768, 768, device=c.dev) for _ in range(3)]
+                a, b, s = self._mat_aquecer
+                for _ in range(4):
+                    torch.mm(a, b, out=s)
+                ev = torch.cuda.Event()
+                ev.record()
+                ev.synchronize()
+            return True
+        except Exception as e:
+            self.placa_aquecida = time.time() + 1e9        # deu erro: nao tenta mais nesta sessao
+            diag.ev("aquecer_erro", erro=repr(e)[:120])
+            return False
+
+    def _manter_morna(self, c):
+        """Durante a conversa (ate 12 s depois da ultima fala) um toque leve a cada 0,25 s: a placa nao
+        baixa o clock entre uma legenda e outra."""
+        if getattr(self, "_mornando", False) or c is not self.clonada or c is None or c.dev == "cpu" \
+                or not self.cfg.get("aquecer_placa", True):
+            return
+        self._mornando = True
+
+        def laco():
+            try:
+                while time.time() - self.placa_usada < 12.0:
+                    if time.time() - self.placa_usada > 0.5 and not self._servico_placa(c):
+                        return
+                    time.sleep(0.25)
+            finally:
+                self._mornando = False
+        threading.Thread(target=laco, daemon=True, name="morna").start()
+
     def previa(self, texto, voz="narrador", tom=1.0, vel=1.0, quem="", cat=""):
         """Ja pede a fala a voz online nas vozes que ela pode ter, SEM falar: quando ela for falada
         de verdade (mesmo texto), o som ja esta chegando. O nucleo chama na 1a leitura da legenda,
@@ -1998,7 +2136,7 @@ class Narrador:
             if self._velha(ger, pag):
                 diag.ev("descartada", id=fid, motivo="ficou para trás antes de gerar")
                 return
-            if not forcar and self._repetido(texto):
+            if not forcar and self._repetido(texto, quem):
                 diag.ev("descartada", id=fid, motivo="repetida")
                 return
             if self.resolver_voz and self.candidatas_voz and self._paralelo():
@@ -2034,6 +2172,7 @@ class Narrador:
                 nivel = Nivelador()
                 t0 = time.time()
                 primeiro = True
+                self.placa_usada = t0
                 diag.ev("gerar_inicio", id=fid, motor=m.nome, voz=voz, quem=quem, pressa=round(pressa, 2),
                         espera_ms=round((t0 - visto) * 1000), fila=self.fila.qsize(), **self._uso_pc())
                 k, total_audio = 0, 0.0
@@ -2069,6 +2208,8 @@ class Narrador:
                                     "taxa": self.taxa_geracao.get(m.nome)}
                             primeiro = False
                         saida((ger, pag, w, sr, dict(info or {}, id=fid, primeiro=info is not None)))
+                    self.placa_usada = time.time()
+                    self._manter_morna(m)
                     gasto = time.time() - t0
                     if total_audio >= 0.8 and not self._velha(ger, pag):
                         nova = total_audio / max(0.001, gasto)
@@ -2376,8 +2517,9 @@ class Narrador:
                 # e virava um buraco logo no comeco da frase. Se ele chegar antes, comeca na hora.
                 # (na voz rapida/online os pedacos chegam ~5x mais rapido do que tocam: nao espera)
                 # voz clonada gerando a 2,5x+ (gerador rapido na placa): o 2o pedaco chega bem antes
-                # do 1o acabar de tocar, esperar por ele so atrasava ~120 ms (16/11)
-                folgada = (info.get("taxa") or 0) >= float(self.cfg.get("pre_buffer_taxa", 2.5))
+                # do 1o acabar de tocar, esperar por ele so atrasava ~120 ms (16/11). A 1,7x tambem: em
+                # 291 falas a 1,8-2,6x o 2o chegou sempre antes, com 33-265 ms de folga (23/11)
+                folgada = (info.get("taxa") or 0) >= float(self.cfg.get("pre_buffer_taxa", 1.7))
                 ate = time.time() + (0.0 if info.get("motor") == "rapida" or folgada else
                                      float(self.cfg.get("pre_buffer_ms", 120)) / 1000)
                 while time.time() < ate:

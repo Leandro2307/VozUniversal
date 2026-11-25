@@ -41,6 +41,24 @@ def instancia_unica():
     return None if k.GetLastError() == 183 else h
 
 
+def evento_janela():
+    """Aviso entre processos: "abra a janela do painel"."""
+    k = ctypes.windll.kernel32
+    k.CreateEventW.restype = ctypes.c_void_p
+    return k.CreateEventW(None, False, False, "VozUniversal_AbrirJanela")
+
+
+def esperar_pedido_de_janela():
+    """Aberto pela Sala 3D ou numa troca de versao: fica SEM janela ate alguem abrir o programa pelo atalho.
+    Qualquer janela (minimizada, escondida, sem foco) tomava a frente ao nascer, e a Sala sem foco para de
+    receber o controle de quem joga (23/11: "toda vez que voce melhora desconecta o meu controle")."""
+    k = ctypes.windll.kernel32
+    k.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    h = evento_janela()
+    while k.WaitForSingleObject(h, 1000) != 0:
+        pass
+
+
 def abrir_janela(porta):
     """Janela do programa (como um app de verdade, sem navegador). Volta quando ela fecha."""
     # o navegador embutido "dorme" quando a janela e minimizada e, ao voltar, ficava uns segundos
@@ -49,11 +67,9 @@ def abrir_janela(porta):
                           "--disable-background-timer-throttling --disable-renderer-backgrounding "
                           "--disable-backgrounding-occluded-windows")
     import webview
-    # aberto pela Sala 3D (PS5 direto): a janela nasce minimizada, sem roubar a frente do jogo
     webview.create_window(
         "Voz Universal", f"http://127.0.0.1:{porta}/", width=1280, height=860,
-        min_size=(900, 620), frameless=True, easy_drag=False, background_color="#0b1230",
-        minimized="--minimizada" in sys.argv)
+        min_size=(900, 620), frameless=True, easy_drag=False, background_color="#0b1230")
     webview.start(gui="edgechromium", private_mode=False,
                   storage_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "recursos", "janela"))
 
@@ -62,12 +78,29 @@ def aviso(texto):
     ctypes.windll.user32.MessageBoxW(None, texto, "Voz Universal", 0x40)
 
 
+def encerrar(nucleo):
+    try:
+        nucleo.abafador.fechar()      # devolve o volume do jogo antes de sair
+    except Exception:
+        pass
+    from nucleo.sala import Sala
+    Sala.despublicar()                # a Sala 3D nao tenta mais falar com este
+    os._exit(0)
+
+
 def main():
     cfg = carregar_config()
     porta = int(cfg.get("porta", 8765))
-    if not instancia_unica():
+    troca = "--troca" in sys.argv      # abre ao lado da versao antiga e assume o lugar dela (nucleo/ponte.py)
+    if not instancia_unica() and not troca:
         if "--minimizada" not in sys.argv:      # aberto pela Sala 3D: o que ja esta aberto serve
-            aviso("A Voz Universal já está aberta.")
+            k = ctypes.windll.kernel32
+            k.SetEvent.argtypes = [ctypes.c_void_p]
+            k.SetEvent(evento_janela())          # a que esta aberta (sem janela) mostra o painel
+            h = ctypes.windll.user32.FindWindowW(None, "Voz Universal")
+            if h:                                # ja tem janela: traz para a frente
+                ctypes.windll.user32.ShowWindow(h, 9)
+                ctypes.windll.user32.SetForegroundWindow(h)
         return
     print("=" * 60)
     print("  VOZ UNIVERSAL   |   F10 pausa   |   F11 repete")
@@ -79,7 +112,17 @@ def main():
         log("Diagnóstico ligado:", diag.abrir())
     from nucleo import painel
     nucleo = Nucleo(cfg)
+    from nucleo import ponte
+    viva = ponte.ponte_viva()
+    nucleo.em_espera = troca and viva is not None      # so le e fala quando a ponte mandar assumir
+    viva = viva or ponte.garantir_ponte()
+    nucleo.usa_ponte = viva is not None
     painel.iniciar(nucleo, porta)
+    if viva:
+        nucleo.sala.ponte = ponte.ClientePonte(nucleo, lambda: encerrar(nucleo))
+        nucleo.sala.ponte.iniciar(*viva)
+    else:
+        log("Ponte da Sala 3D não abriu: ligando direto.", tipo="aviso")
     try:
         import keyboard
         keyboard.add_hotkey("f10", nucleo.alternar_pausa)
@@ -91,16 +134,15 @@ def main():
     if "--sem-janela" in sys.argv:
         while True:
             time.sleep(3600)
+    fim = time.time() + 5
+    while not hasattr(nucleo, "porta_painel") and time.time() < fim:
+        time.sleep(0.05)
     time.sleep(0.4)          # da tempo do servidor do painel subir
-    abrir_janela(porta)      # fica aqui ate a janela fechar
+    if "--minimizada" in sys.argv or troca:
+        esperar_pedido_de_janela()
+    abrir_janela(getattr(nucleo, "porta_painel", porta))      # fica aqui ate a janela fechar
     log("Janela fechada: encerrando.")
-    try:
-        nucleo.abafador.fechar()      # devolve o volume do jogo antes de sair
-    except Exception:
-        pass
-    from nucleo.sala import Sala
-    Sala.despublicar()                # a Sala 3D nao tenta mais falar com este
-    os._exit(0)
+    encerrar(nucleo)
 
 
 if __name__ == "__main__":

@@ -419,6 +419,7 @@ confere("legenda atrasada acelera", _nv._ritmo_inicial(1, _info, 2.5) > 1.3, Tru
 confere("fala nova: inicio ideal e quando apareceu", _nv._inicio_ideal(2, _agora - 1.0), _agora - 1.0)
 # a mesma fala lida de novo com 1-2 letras diferentes nao repete
 import collections as _col   # noqa: E402
+import numpy as np   # noqa: E402
 _nv.recentes = _col.deque(maxlen=12)
 confere("1a vez fala", _nv._repetido("Ei, essa... essa parece que tá certa."), False)
 confere("lida diferente nao repete", _nv._repetido("Ei, essas essa parece que tá certa."), True)
@@ -629,6 +630,229 @@ confere("de mais x demais fica", Leitor._juntar(["Eu falei de mais hoje.", "Eu f
 from nucleo.identidade import eh_plural   # noqa: E402
 for n_, esp in [("Turistas", True), ("Policiais", True), ("Banda", True), ("Marcus", False), ("Lucia", False), ("Pessoa local", False)]:
     confere(f"grupo {n_}", eh_plural(n_), esp)
+
+# GTA 6 23/11: etiqueta de idioma, resto do nome na fala, objetivo repetido e nome estragado
+from nucleo.limpeza import SemNomeRepetida, consertar_palavras_do_nome, sujeira_no_comeco, tirar_idioma   # noqa: E402
+for t, esp in [("Ilsspanh ll Que se foda isso!", "Que se foda isso!"), ("Espanhol Meu carro! Socorro!", "Meu carro! Socorro!"),
+               ("Fspanhol Meu carro!", "Meu carro!"), ("flespanh lil (Que se foda isso!", "Que se foda isso!"),
+               ("Espanhol, eu?", "Espanhol, eu?"), ("Espera Aí, mano.", "Espera Aí, mano."),
+               ("Pessoas Que vão embora.", "Pessoas Que vão embora."), ("Que se foda isso!", "Que se foda isso!")]:
+    confere(f"idioma {t!r}", tirar_idioma(t), esp)
+for t, n_, esp in [("Pessoas locais.sai da frente!", "Pessoa local", "Sai da frente!"), ("Pessoa local.", "Pessoa local", ""),
+                   ("loca;: Ei! Segura o volante!", "Pessoa local", "Ei! Segura o volante!"),
+                   ("Pessoa loca;: Ei! Segura o volante!", "Pessoa local", "Ei! Segura o volante!"),
+                   ('t": Ei cara, o que você tá querendo?', "Turista", "Ei cara, o que você tá querendo?"),
+                   ("Potici?iis:' Não se mexe!", "Policiais", "Não se mexe!"),
+                   ("A COUNTY Mas porra, tô de condicional.", "Desconhecidos", "Mas porra, tô de condicional."),
+                   ("Olha só: eu não sei.", "Jason", "Olha só: eu não sei."), ("Jason, vem cá!", "Lucia", "Jason, vem cá!"),
+                   ("É o FIB Aqui.", "Jason", "É o FIB Aqui."), ("Não. Para com isso.", "Pessoa local", "Não. Para com isso.")]:
+    confere(f"sujeira {t!r}", sujeira_no_comeco(t, n_), esp)
+confere("nome com maiuscula no fim", consertar_palavras_do_nome("TrabalhadoreS", {}), "Trabalhadores")
+confere("nome com cedilha falsa", consertar_palavras_do_nome("Desçonhecidos", {"desconhecidos": 900}), "Desconhecidos")
+_sn = SemNomeRepetida(180)
+_ouv = [_sn.repetida(t, i * 10.0) for i, t in enumerate(
+    ["Fale com o policial penal.", "Não acredito que voc...", "policial penal.", "Fale dom o policial penal.",
+     "Não acredito que voc.", "policial per gal.", "ale com o policial penal.", "Dirija até a prisão.", "Vá até a recepção."])]
+confere("objetivo repetido", _ouv, [False, False, True, True, True, True, True, False, False])
+confere("volta a falar depois do prazo", _sn.repetida("Dirija até a prisão.", 300.0), False)
+for t, n_, esp in [("Pessoas Da próxima vez, não deixa ter uma próxima vez!", "Pessoa local", "Da próxima vez, não deixa ter uma próxima vez!"),
+                   ("ã! Não!", "Jason", "Não!"), ("0-agente da condicional tá no meu pé.", "Lucia", "O agente da condicional tá no meu pé."),
+                   ("E, preciso disso mais do que você.", "Jason", "É, preciso disso mais do que você."),
+                   ("Vai' tomar no cul Você precisa.", "Turista", "Vai tomar no cu Você precisa."),
+                   ("Ah! Não!", "Jason", "Ah! Não!"), ("E eu com isso?", "Jason", "E eu com isso?"),
+                   ("não me toca!.", "Turista", "não me toca!")]:
+    confere(f"sujeira {t!r}", sujeira_no_comeco(t, n_), esp)
+from nucleo.limpeza import DitaHaPouco, aviso_do_ps5, botao_do_jogo   # noqa: E402
+_dh = DitaHaPouco(4.0)
+for q_, t, s_, esp in [("Lucia", "Meu Deus, para... Me encontra no banco, ok?", 0, False), ("Lucia", "Ah, meu banco, ok?", 0.4, True),
+                       ("Turista", "não, não, não, não, não me toca, não me toca!", 1, False),
+                       ("Pessoa local", "Cara... vai se foder... merda...", 2, False),
+                       ("Turista", "Não, não, não, não, não, não me toca, toca!", 3, True),
+                       ("Lucia", "Preciso de um lugar pra depositar meus, sei lá,", 10, False), ("Lucia", "sei lá,", 10.5, True),
+                       ("Lucia", "dois dólares por hora.", 11, False), ("Jason", "Não!", 12, False), ("Jason", "Não!", 13, False),
+                       ("Policiais", "Para esse veículo!", 20, False), ("Policiais", "Para agora mesmo!", 22, False),
+                       ("Policiais", "Para esse veículo!", 27, False)]:
+    confere(f"dita ha pouco {t!r}", _dh.repetida(q_, t, s_), esp)
+for t, esp in [("E quase um garotinho.", "É quase um garotinho."), ("E isso, tô indo pra cama.", "É isso, tô indo pra cama."),
+               ("E isso que você fez?", "E isso que você fez?"), ("Ali, nossa.", "Ah, nossa."), ("Ali, perto da porta.", "Ali, perto da porta."),
+               ("Jay, você trá me encarando.", "Jay, você tá me encarando."), ("I: Ah, merda.", "Ah, merda."), ("ppra usar.", "pra usar.")]:
+    confere(f"sujeira {t!r}", sujeira_no_comeco(t, "Lucia"), esp)
+from nucleo.limpeza import nome_sem_fala, placar   # noqa: E402
+confere("fala no nome", [nome_sem_fala("VJasorli Manda um", "Manda um Buckme."), nome_sem_fala("Pessoa local", "Local errado.")],
+        ["VJasorli", "Pessoa local"])
+confere("placar", [placar("100 4.900 para a próxima meta"), placar("12."), placar("100 dólares por hora.")], [True, False, False])
+for t, n_, esp in [("Lucia, Oi? O que foi?", "Lucia", "Oi? O que foi?"), ("Lucia, vem cá.", "Jason", "Lucia, vem cá."),
+                   ("Gosto do seu cabelo assina-o SENTAR", "Jason", "Gosto do seu cabelo."),
+                   ("Não tô pedindo pro Donnie;-tô pedindo pra você.", "Brian", "Não tô pedindo pro Donnie, tô pedindo pra você."),
+                   ("Claro. Sim, sem-problema.", "Jason", "Claro. Sim, sem problema."), ("Aproxime-se, cara.", "Jason", "Aproxime-se, cara."),
+                   ("Se divirtam, pombinhoS!", "Cal", "Se divirtam, pombinhos!"), ("Fala com a polícia do FIB!", "Cal", "Fala com a polícia do FIB!"),
+                   ("da.';t- Porque tô pouco me fodendo.", "Jason", "Porque tô pouco me fodendo."),
+                   ("eu... Não sei.", "Jason", "eu... Não sei.")]:
+    confere(f"sujeira {t!r}", sujeira_no_comeco(t, n_), esp)
+confere("tô nao vira tio", Leitor._juntar(["TIO os Kingfishers num ouvido e com ele no outro.", "Tô com os Kingfishers num ouvido e com ele no outro."]),
+        "Tô com os Kingfishers num ouvido e com ele no outro.")
+_lp = Leitor(dict(PADRAO))
+_saiu = []
+for _i, _t in enumerate(["Ei, Você não disse que ela te deu um pé na bunda", "Ei, você não disse que ela deu um pé na bunda",
+                         "Ei, você não disse deu um pé na bunda", "você não disse que ela te deu um pé na bunda",
+                         "Cali-Ei você não disse que ela te deu um pé na bunda", "Ei, você não disse que ela te deu um pé-na bunda",
+                         "quando você não quis levar ela?", "quando você não quis levar ela?", "quando você não quis levar ela?"]):
+    _saiu += [f for f, _, _ in _lp.tick(_t, 100 + _i * 0.13)]
+confere("legenda sem ponto que sumiu", (len(_saiu), _saiu[0].endswith("que ela te deu um pé na bunda"), _saiu[-1]),
+        (2, True, "quando você não quis levar ela?"))
+for t, n_, esp in [("Agente da condicional Nah, minha perna.", "Agente da condicional", "Nah, minha perna."),
+                   ("Temos que ir Espanhol Passa a grana!", "Jason", "Temos que ir."),
+                   ("O Brian disse que o atravessa dor cuidava disso.", "Jason", "O Brian disse que o atravessador cuidava disso."),
+                   ("Ah, por ra, é a gente?", "Lucia", "Ah, porra, é a gente?"), ("T á, peraí.", "Lucia", "Tá, peraí."),
+                   ("Pouso s repetidos no Delta.", "Segurança", "Pousos repetidos no Delta."), ("Herda!", "Lucia", "Merda!"),
+                   ("Merda, Lu!Sua tornozeleira disparou?", "Jason", "Merda, Lu! Sua tornozeleira disparou?"),
+                   ("Tô com 30 chamadas. perdidas do agente.", "Lucia", "Tô com 30 chamadas perdidas do agente."),
+                   ("vai- pra casa agora.", "Lucia", "vai pra casa agora."), ('Há..." Tá meio longe.', "Jason", "Há... Tá meio longe."),
+                   ("Merda... vou dar um jeito.", "Jason", "Merda... vou dar um jeito."), ("Você não tava atendendo o celular:", "Joe", "Você não tava atendendo o celular.")]:
+    confere(f"sujeira {t!r}", sujeira_no_comeco(t, n_), esp)
+from nucleo.limpeza import Objetivos   # noqa: E402
+_ob = Objetivos()
+_ob.viu("Voe até um local de entrega.", 0); _ob.viu("Voe até um local de entrega.", 0.2); _ob.viu("Esconda os narcóticos no depósito.", 1)
+_ob.viu("Esconda os narcóticos no depósito.", 1.2)
+confere("objetivo colado", [_ob.tirar(t, 5) for t in ["Você tá bem? Voe até um local de entrega.", "Voe até um Iocal de entrega.", "Esconda os narcóticos no",
+        "A gente tá chegando na entrega. Pronta?", "Espere aí. Eu vou.", "Tá, vamos pensar a respeito, ok?"]],
+        ["Você tá bem?", "", "", "A gente tá chegando na entrega. Pronta?", "Espere aí. Eu vou.", "Tá, vamos pensar a respeito, ok?"])
+from nucleo.limpeza import tirar_dica   # noqa: E402
+confere("dica colada", [tirar_dica(t) for t in ["Tô fazendo certo? Eu respiro estranho? Use e O para direcionar sua atenção.", "Use O e O para direcionar sua atenção.",
+        "Você já parece mais em paz. Solte e para expirar.", "use e para deixar o pensamento passar.", "Use isso para abrir a porta.",
+        "Segura firme.", "Solta ele pra mim.", "Mova essa bunda pra cá."]],
+        ["Tô fazendo certo? Eu respiro estranho?", "", "Você já parece mais em paz.", "", "Use isso para abrir a porta.",
+         "Segura firme.", "Solta ele pra mim.", "Mova essa bunda pra cá."])
+confere("nome com numeros", sujeira_no_comeco("Pessoas210cais: Ei! Eu vi tudo.", "Pessoa local"), "Ei! Eu vi tudo.")
+confere("ena nada", sujeira_no_comeco("Foca na respiração. E não pensa ena nada.", "Lucia"), "Foca na respiração. E não pensa em nada.")
+confere("e so sentar", sujeira_no_comeco("E só sentar e respirar.", "Lucia"), "É só sentar e respirar.")
+_le, _ecos = Leitor(dict(PADRAO)), []
+for _i, _t in enumerate(["Meditar."] * 4 + [""] * 6 + ["Meditar?"] * 5):
+    _ecos += [f for f, _, _ in _le.tick(_t, 200 + _i * 0.13)]
+confere("pergunta de volta", _ecos, ["Meditar.", "Meditar?"])
+confere("pergunta de volta na voz", [_nv._repetido("Meditar.", "Lucia"), _nv._repetido("Meditar?", "Jason"), _nv._repetido("Meditar?", "Jason")],
+        [False, False, True])
+confere("aviso do PS5", [aviso_do_ps5("E Ver tela de você"), aviso_do_ps5("Vai ver só.")], [True, False])
+confere("botao", [botao_do_jogo("O DEFINIR DESTINO,"), botao_do_jogo("Obrigado!")], [True, False])
+confere("objetivo nao e nome", _q._nome_canonico("Fale.com o"), "")
+
+# ---- GTA 6, 24/11 (sessao 12:51): nome colado sem ":", cargo comprido, objetivo na voz de alguem
+from nucleo.util import normalizar   # noqa: E402
+from nucleo.vozes import acentuar_e   # noqa: E402
+from nucleo.limpeza import objetivo_com_dono, pedaco_de_objetivo, prefixo_estragado, resto_do_nome   # noqa: E402
+for t, n_, esp in [("Mattia Depois você volta", "Mattia", "Depois você volta"), ("tia Eu falei, viu?", "Mattia", "Eu falei, viu?"),
+                   ("ia Olha eles aí.", "Mattia", "Olha eles aí."), ("Mattia.", "Mattia", ""), ("Mattia!", "Mattia", "Mattia!"),
+                   ("focal Quer atenção ou o quê?", "Pessoa local", "Quer atenção ou o quê?"), (")cal. Eu vou só embora...", "Pessoa local", "Eu vou só embora..."),
+                   ("Pete Vou pousar aqui.", "Piloto Pete", "Vou pousar aqui."), ("li Não foi por falta de aviso!", "Donnie", "Não foi por falta de aviso!"),
+                   ("Capítulo Fipa17 Conta logo!", "Capítulo Final", "Conta logo!"), ("i annie: Tá, bora voltar pro avião!", "Donnie", "Tá, bora voltar pro avião!"),
+                   ("Pessoas locais. O Dr. Furacão vai sugar você!", "Pessoas locais amarelo", "O Dr. Furacão vai sugar você!"),
+                   ("Pessoas eu podia ter morrido.", "Pessoa local", "eu podia ter morrido."),
+                   # fala de verdade fica
+                   ("do Brian e da Kat.", "Jason", "do Brian e da Kat."), ("com Donnie não dá.", "Jason", "com Donnie não dá."),
+                   ("Jason Duval.", "Jason", "Jason Duval."), ("Jason, vem cá.", "Lucia", "Jason, vem cá."),
+                   ("Não, não, tá de boa.", "Lucia", "Não, não, tá de boa.")]:
+    confere(f"resto do nome {t!r}", resto_do_nome(t, n_), esp)
+for t, esp in [("Do:. De nada.", "De nada."), ("faca:.: e daí terem que comprar", "e daí terem que comprar"), ("IA: Você tá bem?", "Você tá bem?"),
+               ("Cara, que: porra foi aquela?", "Cara, que porra foi aquela?"), ("Jason:. Oi, cara.", "Jason: Oi, cara."),
+               ("Eu disse: vai embora.", "Eu disse: vai embora."), (": O Brian sabe.", "O Brian sabe.")]:
+    confere(f"prefixo {t!r}", prefixo_estragado(t), esp)
+confere("objetivo com dono", [objetivo_com_dono(t) for t in ["Siga o Donnie.", "Entre no seu carro.", "Pilote a lancha.", "Resgate o Donnie de novo.",
+        "Segue o Donnie.", "Espere aí!", "Espere, eu vou com você.", "Entra no carro.", "Vai pro avião!", "Fale com ele, porra."]],
+        [True, True, True, True, False, False, False, False, False, False])
+confere("pedaco de objetivo", [pedaco_de_objetivo(t) for t in ["até a pista de pouso.", "taco de sinuca.", "para a Shirley.", "prisão.",
+        "o mágico, caralho.", "não se preocupa.", "Até a próxima.", "claro."]],
+        [True, True, True, True, False, False, False, False])
+for t, esp in [("Contato da Doze do Diabo: Estão vindo.", "Contato da Doze do Diabo"), ("O que eu quero saber de você: nada.", ""),
+               ("Siga o Donnie até o Bar da Esquina: agora", "")]:
+    confere(f"cargo comprido {t!r}", separar_nome([L(t)])[0], esp)
+_q.perfil.personagens.update({"Contato da Doze do Diabo": {}, "Capítulo Final": {}})
+_q._falou_t = {normalizar("Capítulo Final"): _time.time(), "lucia": _time.time()}
+confere("cargo comprido com erro", [_q._nome_canonico("Contato Na Doze do Diabo"), _q._nome_canonico("Contato da Doze Ido Diabo")],
+        ["Contato da Doze do Diabo"] * 2)
+confere("fim do nome e a mesma pessoa", _q._nome_canonico("Final"), "Capítulo Final")
+confere("cargo com virgula", _q._nome_na_fala("Pessoa local, Toma juízo, pode ser?"), ("Pessoa local", "Toma juízo, pode ser?"))
+confere("chamado com virgula nao e nome", _q._nome_na_fala("Lucia, Você vem?")[0], "")
+confere("nome cortado", _q._nome_na_fala("Luci Bom, ouvi falar que sim."), ("Lucia", "Bom, ouvi falar que sim."))
+_dt = DitaHaPouco()
+confere("sem nome e depois com nome", [_dt.repetida("", "Cara, que porra foi aquela? Quem faz isso?", 0), _dt.repetida("Donnie", "Cara, que porra foi aquela? Quem faz isso?", 2),
+        _dt.repetida("Lucia", "Donnie!", 2.1)], [False, True, False])
+confere("E bom / E so", [acentuar_e(t) for t in ["E só superstição!", "E bom você pagar!", "E só a TV que ficou ligada.", "E alugado!", "E só depois ele veio.",
+        "E obrigado!", "E a Lucia?"]], ["É só superstição!", "É bom você pagar!", "É só a TV que ficou ligada.", "É alugado!", "E só depois ele veio.",
+        "E obrigado!", "E a Lucia?"])
+confere("placar meta", placar("4900 para a próxima meta Poupança família"), True)
+
+# ---- GTA 6, 24/11 (sessao 20:41): voz trocada, acento do "É" pela imagem, buraco depois do "Ah"
+from nucleo.tela import acento_em_cima, consertar_prefixo, cor_da_paleta   # noqa: E402
+from nucleo.identidade import eh_generico   # noqa: E402
+from nucleo.vozes import em_silencio, emendar_interjeicao, encurtar_pausa, preparar_fala as _prep   # noqa: E402
+confere("mamae urso nao e crianca", [p for p in pistas_texto("Aguenta firme, mamãe urso!") + pistas_texto(
+    "quer que o papai peça desculpas pra mamãe por ele") if p[1] == "crianca"], [])
+confere("crianca chamando", [p[1] for p in pistas_texto("Mamãe, olha isso!")], ["crianca"])
+confere("fala da esposa nao e crianca", _Elenco._decidir({"s": {"m": 5.7}, "i": {"crianca": 1.6, "adulto": 1}})[0], "homem")
+_el2 = _Elenco(_PerfilVazio(), _BancoTom())
+for _k in range(30):
+    _el2.observar("Brian", "Vamos embora logo.")
+_v0 = _el2.ficha("Brian")["voz"]
+for _k in range(4):
+    _el2.observar("Brian", "Mamãe, vem cá!")
+confere("depois de 20 falas a idade nao muda", (_el2.ficha("Brian")["categoria"], _el2.ficha("Brian")["voz"]), ("homem", _v0))
+_el2.perfil.personagens["Pessoa desconhecida"] = {"categoria": "mulher", "voz": "m_1", "tom": 1.0, "vel": 1.0, "falas": 98,
+    "fixo": False, "pistas": ["disse “obrigada”"], "pontos": {"s": {"f": 6.4}}, "mudou_tarde": True, "confianca": 0.6}
+_el2.observar("Pessoa desconhecida", "Muito obrigada!")
+confere("generico nao guarda sexo do texto", _el2.ficha("Pessoa desconhecida")["categoria"], "homem")
+_vp = _el2.ficha("Pessoa desconhecida")["voz"]
+_el2.observar("Pessoa desconhecida", "Obrigada!")
+confere("generico: voz nao muda", _el2.ficha("Pessoa desconhecida")["voz"], _vp)
+confere("eh generico", [eh_generico(x) for x in ["Pessoa local", "Policiais", "Turista", "Jason", "Kingfishers", "Aviador"]],
+        [True, True, True, False, False, False])
+confere("paleta", [cor_da_paleta(h) for h in (30, 60, 72, 158, 172, 181, 300, 351, 2)],
+        ["laranja", "amarelo", "amarelo", "verde", "ciano", "ciano", "roxo", "rosa", "rosa"])
+import collections as _col   # noqa: E402
+import numpy as np   # noqa: E402
+_nf = Nucleo.__new__(Nucleo)
+_nf.elenco = _el2
+_fb = _el2.ficha("Pessoa desconhecida")
+_nf._cores_lidas = _col.deque([(_time.time(), "Pessoa desconhecida", 61, "Ei, quem é você?"), (_time.time(), "Pessoa desconhecida", 157, "Sou o cara da festa."),
+                               (_time.time(), "Pessoa desconhecida", 298, "Que talento, obrigada!")])
+_ag = _time.time()
+_a = _nf._voz_do_figurante("Pessoa desconhecida", "Ei, quem é você?", _fb, True, _ag)
+_b = _nf._voz_do_figurante("Pessoa desconhecida", "Sou o cara da festa.", _fb, True, _ag)
+_c = _nf._voz_do_figurante("Pessoa desconhecida", "Que talento, obrigada!", _fb, True, _ag)
+confere("1o figurante usa a voz da ficha", _a["voz"], _fb["voz"])
+confere("outra cor, outra voz", _b["voz"] != _a["voz"], True)
+confere("so quem disse obrigada e mulher", (_a["categoria"], _b["categoria"], _c["categoria"]), ("homem", "homem", "mulher"))
+confere("mesma legenda nao troca", _nf._voz_do_figurante("Pessoa desconhecida", "Ei, quem é você?", _fb, False, _ag + 1)["voz"], _c["voz"])
+confere("mesma cor volta com a mesma voz", _nf._voz_do_figurante("Pessoa desconhecida", "Ei, quem é você?", _fb, True, _ag + 2)["voz"], _a["voz"])
+confere("nome proprio nao muda", _nf._voz_do_figurante("Jason", "Oi.", {"voz": "jason"}, True, _ag)["voz"], "jason")
+for _t, _esp in [("Pessoa: desconhecida: Não grita comigo!", "Pessoa desconhecida: Não grita comigo!"),
+                 ("pessoas locais: Ei se liga", "Pessoas locais: Ei se liga"), ("F) desconhecida: No verão", "Pessoa desconhecida: No verão"),
+                 ("Pessoa local: Oi.", "Pessoa local: Oi."), ("Banco local: aberto", "Banco local: aberto")]:
+    confere(f"prefixo generico {_t!r}", consertar_prefixo((_t, 0, 0, 1, 1))[0], _esp)
+
+
+def _letra(txt, fundo):
+    im = _Img.new("RGB", (120, 80), fundo)
+    _Draw.Draw(im).text((30, 25), txt, fill=(245, 245, 245), font=_f, stroke_width=2, stroke_fill=(0, 0, 0))
+    x0, y0, x1, y1 = _Draw.Draw(im).textbbox((30, 25), "E", font=_f)
+    return acento_em_cima(im, x0, y0, x1 - x0, y1 - y0)
+
+
+for _fundo in [(20, 20, 20), (120, 110, 90), (235, 235, 240)]:
+    confere(f"acento do É na imagem, fundo {_fundo}", (_letra("É", _fundo), _letra("E", _fundo)), (True, False))
+_dk = Dicionario()
+confere("fundir prefere o acento", _dk.fundir("E melhor abaixar.", "É melhor abaixar."), "É melhor abaixar.")
+for _t, _esp in [("Ah, sabe como é.", "Ah sabe como é."), ("Hã, qual é?", "Hã qual é?"), ("Ah... você vem?", "Ah você vem?"),
+                 ("Ah! Lucia!", "Ah! Lucia!"), ("Ah, ah, Mattia.", "Ah ah Mattia."), ("Olha, vai.", "Olha, vai."), ("Ah...", "Ah..."),
+                 ("O quê? Ah, sim.", "O quê? Ah sim.")]:
+    confere(f"emendar {_t!r}", emendar_interjeicao(_t), _esp)
+confere("há vira hã so na hesitacao", [_prep(x) for x in ["Ah, há, posso pegar?", "Há... sinto muito", "Não há nada aqui.", "Há dois dias."]],
+        ["Ah, hã, posso pegar?", "Hã, sinto muito", "Não há nada aqui.", "Há dois dias."])
+_tt = np.arange(int(24000 * .33)) / 24000
+_vog = (0.3 * np.sin(2 * np.pi * 120 * _tt)).astype(np.float32)
+_bur = np.concatenate([_vog, np.zeros(int(24000 * .55), np.float32), _vog])
+confere("buraco depois do Ah", abs(len(encurtar_pausa(_bur, 24000, 0.06)) / 24000 - 0.72) < 0.03, True)
+confere("sem buraco fica igual", len(encurtar_pausa(np.concatenate([_vog, _vog]), 24000, 0.06)), 2 * len(_vog))
+confere("pausa que nao acabou", (em_silencio(_bur[:int(24000 * .8)], 24000), em_silencio(_bur, 24000)), (True, False))
 
 print(f"{'TUDO CERTO' if not falhas else 'FALHAS'}: {len(falhas)} problema(s)")
 for f in falhas:

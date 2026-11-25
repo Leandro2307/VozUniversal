@@ -255,7 +255,9 @@ _PISTAS_TEXTO = [
     (r"\bsou (?:um |o )homem\b", [("s", "m", 3), ("i", "adulto", 1.5)], "disse que é homem"),
     (r"\bquando eu crescer\b|\bquando eu for grande\b|\bminha mamãe\b|\bmeu papai\b",
      [("i", "crianca", 2)], "fala como criança"),
-    (r"\b(?:mamãe|papai)\b", [("i", "crianca", 0.8)], "chama mamãe/papai"),
+    # so CHAMANDO ("Mamãe, olha!"): "Aguenta firme, mamãe urso!" e o Brian falando da mulher e ele virou
+    # menino no meio da missao (24/11; nas sessoes guardadas, os 5 usos eram de adultos)
+    (r"(?:^\s*|[.!?,…]\s*)(?:mamãe|papai)\s*[,.!?…]", [("i", "crianca", 0.8)], "chama mamãe/papai"),
     (r"\bminha (?:mãe|mae) (?:disse|falou|mandou|deixa|não deixa)\b", [("i", "crianca", 1.2)], "fala da mãe como criança"),
     (r"\bmeu jovem\b|\bminha jovem\b|\bjovenzinho\b|\brapazinho\b|\bminha criança\b|\bmeu filho\b.{0,30}\bvelho\b",
      [("i", "idoso", 1.5)], "trata o outro como jovem"),
@@ -460,6 +462,12 @@ def eh_plural(nome):
     return len(p) >= 5 and p.endswith("s") and p not in nomes_proprios()
 
 
+def eh_generico(nome):
+    """Nome que o jogo da para gente diferente: "Pessoa desconhecida", "Pessoa local", "Turista", "Policial"."""
+    from .tela import eh_figurante
+    return eh_figurante(nome) or (nome or "").lower().split()[:1] in (["policial"], ["policiais"])
+
+
 class Elenco:
     """Fichas dos personagens de um jogo (vivem no perfil do jogo)."""
 
@@ -473,6 +481,8 @@ class Elenco:
     def _decidir(pontos):
         s = {k: PRIOR["s"][k] + pontos.get("s", {}).get(k, 0) for k in ("m", "f")}
         i = {k: PRIOR["i"][k] + pontos.get("i", {}).get(k, 0) for k in ("crianca", "adulto", "idoso")}
+        # fala da esposa/do marido/dos filhos: nao e crianca
+        i["crianca"] -= 2 * pontos.get("i", {}).get("adulto", 0)
         sexo = max(s, key=s.get)
         idade = max(i, key=i.get)
 
@@ -492,7 +502,7 @@ class Elenco:
             return conf_sexo
         return conf
 
-    def _voz_para(self, nome, categoria, f0=None):
+    def _voz_para(self, nome, categoria, f0=None, ocupadas=()):
         """Escolhe a voz da categoria menos usada no jogo e uma variacao de tom/ritmo que
         ninguem usa ainda com essa voz -> nunca dois personagens com a mesma voz.
         f0 (tom da voz ORIGINAL do jogo, Hz): entre as menos usadas, a de tom mais parecido, com um
@@ -515,6 +525,9 @@ class Elenco:
                 return voz, tom, 1.0
         pers = self.perfil.personagens
         uso = {v: 0 for v in vozes}
+        for v in ocupadas:                       # figurantes da cena (nao tem ficha)
+            if v in uso:
+                uso[v] += 100
         usadas = set()
         for n, f in pers.items():
             if n == nome:
@@ -561,7 +574,16 @@ class Elenco:
             pistas = []
             if novo:
                 pistas += pistas_nome(nome)
-            if not eh_plural(nome):
+            if eh_generico(nome):
+                # "Pessoa desconhecida" e muita gente: um "obrigada" de uma deixou TODAS com voz de mulher
+                # (24/11). A pista do texto vale so para quem falou (Nucleo._voz_do_figurante)
+                if not f.get("sem_texto"):
+                    f["sem_texto"] = True
+                    if not f.get("ouvidas") and not f.get("fixo") and not novo:
+                        f["pontos"], f["pistas"], f["mudou_tarde"] = {}, [], False
+                        f["falas"] = min(f["falas"], 1)
+                        pistas += pistas_nome(nome)
+            elif not eh_plural(nome):
                 # grupo ("Turistas", "Policiais"): cada fala e de uma pessoa diferente; "Eu sou velha!"
                 # de uma turista deixava todos os turistas com voz de idosa (22/11)
                 pistas += pistas_texto(texto)
@@ -587,6 +609,8 @@ class Elenco:
                 # depois de 6 falas e ficou com voz de homem adulto)
                 troca = self._certeza_troca(f.get("categoria"), cat, conf, conf_s)
                 tarde = (f["falas"] > 6 and troca >= 0.7 and not f.get("mudou_tarde") and not f.get("fixo"))
+                if tarde and f["falas"] > 20 and f.get("categoria") and _sexo_da_categoria(f["categoria"]) == _sexo_da_categoria(cat):
+                    tarde = False          # depois de 20 falas a idade nao muda mais (Brian e Lori, 24/11)
                 if cat != f.get("categoria") and (f.get("categoria") is None or f["falas"] <= 6 or tarde or forcado):
                     if f["falas"] > 6:
                         f["mudou_tarde"] = True

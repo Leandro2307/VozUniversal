@@ -66,6 +66,13 @@ class Sala:
         self.conectada = False
         self.quadros = 0
         self.ult_abafar = None
+        self.ponte = None            # nucleo/ponte.py (troca de versao sem derrubar a pagina)
+        self._novo = threading.Event()
+
+    def esperar_quadro(self, prazo):
+        """Espera o proximo quadro do PS5 (ou o prazo)."""
+        if self._novo.wait(prazo):
+            self._novo.clear()
 
     # ------------------------------------------------------------- arquivo para o ajudante da sala
     def publicar(self, porta):
@@ -126,6 +133,7 @@ class Sala:
                 self.jpeg_t = time.time()
                 self.jpeg_n += 1
             self.quadros += 1
+            self._novo.set()
         elif tipo == SOM:
             corpo = dados[CAB:]
             corpo = corpo[:len(corpo) - len(corpo) % 4]

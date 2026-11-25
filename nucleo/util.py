@@ -95,7 +95,8 @@ PADRAO = {
     "narrador_sem_nome": True,     # texto sem nome de quem fala: voz do narrador
     "auto_regiao": True,           # descobrir sozinho onde fica a caixa de dialogo
     "intervalo_ms": 110,
-    "estabilidade_ms": 200,
+    "estabilidade_ms": 110,        # 2 leituras iguais (era 200: 3 leituras, ~115 ms a mais ate falar)
+    "sem_nome_repete_s": 180,      # frase sem nome (objetivo, previa do celular) ja dita: so repete depois disto
     "sem_pontuacao_ms": 700,
     "sumiu_ms": 450,
     "memoria_s": 8,
@@ -139,7 +140,11 @@ PADRAO = {
 
 def carregar_config():
     cfg = json.loads(json.dumps(PADRAO))
-    cfg.update(ler_json(CONFIG, {}) or {})
+    salvo = ler_json(CONFIG, {}) or {}
+    if not salvo.get("ajuste_2311") and salvo.get("estabilidade_ms") == 200:
+        salvo["estabilidade_ms"] = 110       # config de antes (o padrao era 200)
+    cfg.update(salvo)
+    cfg["ajuste_2311"] = True
     gravar_json(CONFIG, cfg)
     return cfg
 

@@ -284,8 +284,16 @@ def iniciar(nucleo, porta):
         asyncio.set_event_loop(laco)
         runner = web.AppRunner(app, access_log=None)
         laco.run_until_complete(runner.setup())
-        laco.run_until_complete(web.TCPSite(runner, "127.0.0.1", porta).start())
-        nucleo.sala.publicar(porta)        # a Sala 3D acha o Voz Universal por este arquivo
+        # durante a troca de versao a antiga ainda esta com a porta: a nova fica na seguinte
+        for p in (porta, porta + 1, porta + 2, porta + 3):
+            try:
+                laco.run_until_complete(web.TCPSite(runner, "127.0.0.1", p).start())
+                nucleo.porta_painel = p
+                break
+            except OSError:
+                continue
+        if not getattr(nucleo, "usa_ponte", False):
+            nucleo.sala.publicar(getattr(nucleo, "porta_painel", porta))    # sem ponte: a Sala liga direto aqui
         laco.run_forever()
 
     threading.Thread(target=rodar, daemon=True).start()
